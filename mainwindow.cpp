@@ -67,7 +67,7 @@ QGroupBox *buildRunPanel()
     auto *group = new QGroupBox(QStringLiteral("运行设置"));
     auto *layout = new QVBoxLayout(group);
     layout->setSpacing(10);
-
+    layout->setAlignment(Qt::AlignTop);
     auto *row1 = new QHBoxLayout;
     row1->addWidget(new QPushButton(QStringLiteral("轨迹跟踪初始化")));
     row1->addWidget(new QPushButton(QStringLiteral("示教")));
@@ -78,11 +78,13 @@ QGroupBox *buildRunPanel()
     layout->addWidget(new QPushButton(QStringLiteral("运行算法")));
 
     auto *durationRow = new QHBoxLayout;
-    durationRow->addStretch();
+    durationRow->setContentsMargins(0, 0, 0, 0);
+    durationRow->setSpacing(8);
     durationRow->addWidget(new QLabel(QStringLiteral("总时长")));
     auto *secondsBox = new QSpinBox;
     secondsBox->setRange(1, 120);
     secondsBox->setValue(6);
+    secondsBox->setFixedWidth(72);
     durationRow->addWidget(secondsBox);
     durationRow->addWidget(new QLabel(QStringLiteral("秒")));
     durationRow->addStretch();
