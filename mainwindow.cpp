@@ -13,83 +13,97 @@
 #include <QTextEdit>
 #include <QVBoxLayout>
 
-namespace {
-QGroupBox *buildConnectionPanel()
+QGroupBox *MainWindow::buildConnectionPanel()
 {
     auto *group = new QGroupBox(QStringLiteral("连接设备"));
     auto *layout = new QGridLayout(group);
     layout->setHorizontalSpacing(12);
     layout->setVerticalSpacing(8);
+    layout->setRowStretch(6, 1);
+    layout->setAlignment(Qt::AlignTop);
 
     auto *portLabel = new QLabel(QStringLiteral("串口号:"));
-    auto *portCombo = new QComboBox;
-    portCombo->addItems({"COM1", "COM2", "COM3"});
 
-    auto *baudCombo = new QComboBox;
-    baudCombo->addItems({"9600", "57600", "115200"});
+    portCombo_ = new QComboBox;
+    portCombo_->addItems({"COM1", "COM2", "COM3"});
 
-    auto *parityCombo = new QComboBox;
-    parityCombo->addItems({QStringLiteral("None"), QStringLiteral("Odd"), QStringLiteral("Even")});
+    baudCombo_ = new QComboBox;
+    baudCombo_->addItems({"9600", "57600", "115200"});
 
-    auto *dataBitsCombo = new QComboBox;
-    dataBitsCombo->addItems({"8", "7"});
+    parityCombo_ = new QComboBox;
+    parityCombo_->addItems({QStringLiteral("None"), QStringLiteral("Odd"), QStringLiteral("Even")});
 
-    auto *timeoutCombo = new QComboBox;
-    timeoutCombo->addItems({"500", "1000", "2000"});
+    dataBitsCombo_ = new QComboBox;
+    dataBitsCombo_->addItems({"8", "7"});
 
-    auto *openBtn = new QPushButton(QStringLiteral("打开串口"));
-    auto *refreshBtn = new QPushButton(QStringLiteral("刷新设备"));
-    auto *enableBtn = new QPushButton(QStringLiteral("使能电机"));
-    auto *disableBtn = new QPushButton(QStringLiteral("失能电机"));
+    timeoutCombo_ = new QComboBox;
+    timeoutCombo_->addItems({"500", "1000", "2000"});
+
+    openBtn_ = new QPushButton(QStringLiteral("打开串口"));
+    refreshBtn_ = new QPushButton(QStringLiteral("刷新设备"));
+    enableBtn_ = new QPushButton(QStringLiteral("使能电机"));
+    disableBtn_ = new QPushButton(QStringLiteral("失能电机"));
 
     layout->addWidget(portLabel, 0, 0);
-    layout->addWidget(portCombo, 1, 0);
-    layout->addWidget(openBtn, 1, 1, 1, 1);
+    layout->addWidget(portCombo_, 1, 0);
+    layout->addWidget(openBtn_, 1, 1);
 
-    layout->addWidget(baudCombo, 2, 0);
-    layout->addWidget(refreshBtn, 2, 1);
+    layout->addWidget(baudCombo_, 2, 0);
+    layout->addWidget(refreshBtn_, 2, 1);
 
-    layout->addWidget(parityCombo, 3, 0);
-    layout->addWidget(enableBtn, 3, 1);
+    layout->addWidget(parityCombo_, 3, 0);
+    layout->addWidget(enableBtn_, 3, 1);
 
-    layout->addWidget(dataBitsCombo, 4, 0);
-    layout->addWidget(disableBtn, 4, 1);
+    layout->addWidget(dataBitsCombo_, 4, 0);
+    layout->addWidget(disableBtn_, 4, 1);
 
-    layout->addWidget(timeoutCombo, 5, 0);
+    layout->addWidget(timeoutCombo_, 5, 0);
 
     return group;
 }
 
-QGroupBox *buildRunPanel()
+QGroupBox *MainWindow::buildRunPanel()
 {
     auto *group = new QGroupBox(QStringLiteral("运行设置"));
     auto *layout = new QVBoxLayout(group);
     layout->setSpacing(10);
+    layout->setAlignment(Qt::AlignTop);
 
     auto *row1 = new QHBoxLayout;
-    row1->addWidget(new QPushButton(QStringLiteral("轨迹跟踪初始化")));
-    row1->addWidget(new QPushButton(QStringLiteral("示教")));
+    initTrackBtn_ = new QPushButton(QStringLiteral("轨迹跟踪初始化"));
+    teachBtn_ = new QPushButton(QStringLiteral("示教"));
+    row1->addWidget(initTrackBtn_);
+    row1->addWidget(teachBtn_);
     layout->addLayout(row1);
 
-    layout->addWidget(new QPushButton(QStringLiteral("清除数据")));
-    layout->addWidget(new QPushButton(QStringLiteral("设置时长")));
-    layout->addWidget(new QPushButton(QStringLiteral("运行算法")));
+    clearDataBtn_ = new QPushButton(QStringLiteral("清除数据"));
+    setDurationBtn_ = new QPushButton(QStringLiteral("设置时长"));
+    runAlgoBtn_ = new QPushButton(QStringLiteral("运行算法"));
+
+    layout->addWidget(clearDataBtn_);
+    layout->addWidget(setDurationBtn_);
+    layout->addWidget(runAlgoBtn_);
 
     auto *durationRow = new QHBoxLayout;
-    durationRow->addStretch();
+    durationRow->setContentsMargins(0, 0, 0, 0);
+    durationRow->setSpacing(8);
     durationRow->addWidget(new QLabel(QStringLiteral("总时长")));
-    auto *secondsBox = new QSpinBox;
-    secondsBox->setRange(1, 120);
-    secondsBox->setValue(6);
-    durationRow->addWidget(secondsBox);
+
+    secondsBox_ = new QSpinBox;
+    secondsBox_->setRange(1, 120);
+    secondsBox_->setValue(6);
+    secondsBox_->setFixedWidth(72);
+    durationRow->addWidget(secondsBox_);
     durationRow->addWidget(new QLabel(QStringLiteral("秒")));
     durationRow->addStretch();
+
+    layout->addSpacing(8);
     layout->addLayout(durationRow);
 
     return group;
 }
 
-QGroupBox *buildTunePanel()
+QGroupBox *MainWindow::buildTunePanel()
 {
     auto *group = new QGroupBox(QStringLiteral("参数调试"));
     auto *layout = new QGridLayout(group);
@@ -111,7 +125,6 @@ QGroupBox *buildTunePanel()
     layout->addWidget(new QPushButton(QStringLiteral("测试键")), names.size(), 3);
 
     return group;
-}
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -150,11 +163,11 @@ MainWindow::MainWindow(QWidget *parent)
     auto *topRight = new QHBoxLayout;
     auto *logGroup = new QGroupBox(QStringLiteral("提示"));
     auto *logLayout = new QVBoxLayout(logGroup);
-    auto *logText = new QTextEdit;
-    logText->setReadOnly(true);
-    logText->setPlainText(
+    logText_ = new QTextEdit;
+    logText_->setReadOnly(true);
+    logText_->setPlainText(
         QStringLiteral("嗨连接串口并使能电机\n\n如果想跟踪期望轨迹请先初始化，并等待初始化完成\n......"));
-    logLayout->addWidget(logText);
+    logLayout->addWidget(logText_);
 
     topRight->addWidget(logGroup, 3);
     topRight->addWidget(buildConnectionPanel(), 2);
@@ -171,4 +184,23 @@ MainWindow::MainWindow(QWidget *parent)
 
     setCentralWidget(central);
 
+    connect(openBtn_, &QPushButton::clicked, this, &MainWindow::onOpenSerialClicked);
+    connect(refreshBtn_, &QPushButton::clicked, this, &MainWindow::onRefreshDevicesClicked);
+    connect(setDurationBtn_, &QPushButton::clicked, this, &MainWindow::onSetDurationClicked);
+}
+
+void MainWindow::onOpenSerialClicked()
+{
+    logText_->append(QStringLiteral("打开串口：%1, 波特率：%2")
+                         .arg(portCombo_->currentText(), baudCombo_->currentText()));
+}
+
+void MainWindow::onRefreshDevicesClicked()
+{
+    logText_->append(QStringLiteral("已刷新设备列表（示例逻辑）"));
+}
+
+void MainWindow::onSetDurationClicked()
+{
+    logText_->append(QStringLiteral("总时长设置为 %1 秒").arg(secondsBox_->value()));
 }
