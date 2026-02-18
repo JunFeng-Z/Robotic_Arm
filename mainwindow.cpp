@@ -20,6 +20,7 @@ QGroupBox *buildConnectionPanel()
     auto *layout = new QGridLayout(group);
     layout->setHorizontalSpacing(12);
     layout->setVerticalSpacing(8);
+    layout->setRowStretch(6, 1);
 
     auto *portLabel = new QLabel(QStringLiteral("串口号:"));
     auto *portCombo = new QComboBox;
@@ -56,6 +57,7 @@ QGroupBox *buildConnectionPanel()
     layout->addWidget(disableBtn, 4, 1);
 
     layout->addWidget(timeoutCombo, 5, 0);
+    layout->setAlignment(Qt::AlignTop);
 
     return group;
 }
@@ -84,6 +86,8 @@ QGroupBox *buildRunPanel()
     durationRow->addWidget(secondsBox);
     durationRow->addWidget(new QLabel(QStringLiteral("秒")));
     durationRow->addStretch();
+
+    layout->addSpacing(8);
     layout->addLayout(durationRow);
 
     return group;
@@ -117,7 +121,7 @@ QGroupBox *buildTunePanel()
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(QStringLiteral("3D Camera 控制台"));
+    setWindowTitle(QStringLiteral("机械臂运动控制台"));
     resize(1600, 900);
 
     auto *central = new QWidget;
