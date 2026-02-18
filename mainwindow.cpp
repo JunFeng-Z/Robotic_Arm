@@ -21,9 +21,7 @@ QGroupBox *buildConnectionPanel()
     layout->setHorizontalSpacing(12);
     layout->setVerticalSpacing(8);
 
-    // --- 控件 ---
     auto *portLabel = new QLabel(QStringLiteral("串口号:"));
-
     auto *portCombo = new QComboBox;
     portCombo->addItems({"COM1", "COM2", "COM3"});
 
@@ -44,53 +42,23 @@ QGroupBox *buildConnectionPanel()
     auto *enableBtn = new QPushButton(QStringLiteral("使能电机"));
     auto *disableBtn = new QPushButton(QStringLiteral("失能电机"));
 
-    // --- 固定尺寸策略（防止被拉伸） ---
-    QSizePolicy fixedPolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+    layout->addWidget(portLabel, 0, 0);
+    layout->addWidget(portCombo, 1, 0);
+    layout->addWidget(openBtn, 1, 1, 1, 1);
 
-    portCombo->setSizePolicy(fixedPolicy);
-    baudCombo->setSizePolicy(fixedPolicy);
-    parityCombo->setSizePolicy(fixedPolicy);
-    dataBitsCombo->setSizePolicy(fixedPolicy);
-    timeoutCombo->setSizePolicy(fixedPolicy);
-
-    openBtn->setSizePolicy(fixedPolicy);
-    refreshBtn->setSizePolicy(fixedPolicy);
-    enableBtn->setSizePolicy(fixedPolicy);
-    disableBtn->setSizePolicy(fixedPolicy);
-
-    // --- 布局 ---
-    layout->addWidget(portLabel,   0, 0);
-    layout->addWidget(portCombo,   1, 0);
-    layout->addWidget(openBtn,     1, 1);
-
-    layout->addWidget(baudCombo,   2, 0);
-    layout->addWidget(refreshBtn,  2, 1);
+    layout->addWidget(baudCombo, 2, 0);
+    layout->addWidget(refreshBtn, 2, 1);
 
     layout->addWidget(parityCombo, 3, 0);
-    layout->addWidget(enableBtn,   3, 1);
+    layout->addWidget(enableBtn, 3, 1);
 
     layout->addWidget(dataBitsCombo, 4, 0);
-    layout->addWidget(disableBtn,    4, 1);
+    layout->addWidget(disableBtn, 4, 1);
 
     layout->addWidget(timeoutCombo, 5, 0);
 
-    // --- 关键：加入“弹簧列” ---
-    layout->addItem(
-        new QSpacerItem(40, 20, QSizePolicy::Expanding, QSizePolicy::Minimum),
-        0, 2, 6, 1
-        );
-
-    // --- 只允许弹簧拉伸 ---
-    layout->setColumnStretch(0, 0);
-    layout->setColumnStretch(1, 0);
-    layout->setColumnStretch(2, 1);
-
-    // --- 整个面板不无限拉伸 ---
-    group->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
-
     return group;
 }
-
 
 QGroupBox *buildRunPanel()
 {
@@ -149,7 +117,7 @@ QGroupBox *buildTunePanel()
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(QStringLiteral("机械臂运动控制台"));
+    setWindowTitle(QStringLiteral("3D Camera 控制台"));
     resize(1600, 900);
 
     auto *central = new QWidget;
@@ -203,11 +171,4 @@ MainWindow::MainWindow(QWidget *parent)
 
     setCentralWidget(central);
 
-    central->setStyleSheet(
-        "QWidget { background-color: #c8d4e2; }"
-        "QGroupBox { background-color: #f1f0d9; border: 1px solid #c3c3c3; margin-top: 10px; }"
-        "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px; }"
-        "QTextEdit { background-color: #f4dede; border: 1px solid #cccccc; }"
-        "QPushButton { min-height: 34px; background-color: #efefef; border: 1px solid #bababa; border-radius: 4px; }"
-        "QComboBox, QSpinBox { min-height: 28px; background-color: #efefef; }");
 }
