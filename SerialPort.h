@@ -14,14 +14,14 @@
 #include <chrono>
 #include <queue>
 
-void print_data(const uint8_t* data, uint8_t len)
-{
-  for (int i = 0; i < len; i++)
-  {
-    printf("%02x ", data[i]);
-  }
-  printf("\n");
-}
+// void print_data(const uint8_t* data, uint8_t len)
+// {
+//   for (int i = 0; i < len; i++)
+//   {
+//     printf("%02x ", data[i]);
+//   }
+//   printf("\n");
+// }
 
 class SerialPort
 {
@@ -46,7 +46,7 @@ public:
     // tcdrain(fd_);
     return ret;
   }
-
+//最多读取 len 字节 ,放入 data
   ssize_t recv(uint8_t* data, size_t len)
   {
     FD_ZERO(&rSet_);
@@ -56,10 +56,10 @@ public:
     switch (select(fd_ + 1, &rSet_, NULL, NULL, &timeout_))
     {
     case -1: // error
-      // std::cout << "communication error" << std::endl;
+      std::cout << "communication error" << std::endl;
       break;
     case 0: // timeout
-      // std::cout << "timeout" << std::endl;
+      //std::cout << "timeout" << std::endl;
       break;
     default:
       recv_len = ::read(fd_, data, len);
@@ -113,7 +113,9 @@ private:
     fd_ = open(port.c_str(), O_RDWR | O_NOCTTY);
     if (fd_ < 0)
     {
-      printf("Open serial port %s failed\n", port.c_str());
+        printf("Open serial port %s failed\n", port.c_str());
+        printf("errno: %d\n", errno);
+        printf("error: %s\n", strerror(errno));
       exit(-1);
     }
 
