@@ -5,6 +5,10 @@
 
 #include <QMainWindow>
 #include <QMutex>
+#include <QWaitCondition>
+
+// 前向声明
+class JointState;
 
 class QCloseEvent;
 class QComboBox;
@@ -16,6 +20,7 @@ class QThread;
 class SerialPort;
 class SerialRxWorker;
 class CanParserWorker;
+class RobotController;
 
 class MainWindow : public QMainWindow
 {
@@ -34,7 +39,12 @@ private slots:
     void onSetDurationClicked();
     void onEnableClicked();
     void onDisableClicked();
-    void onJointStateUpdated(int jointIndex, float position, float velocity);
+    void onJointStateUpdated(const JointState &state);
+    void onInitTrackClicked();
+    void onTeachClicked();
+    void onRunAlgoClicked();
+    void onControlCommandSent(int jointIndex, float targetPos, float targetVel);
+    void onControlStatusChanged(bool running);
 
 private:
     QGroupBox *buildConnectionPanel();
@@ -77,12 +87,14 @@ private:
     FIFO uartRxFifo_{4096};
     QMutex canRxMutex_;
     QMutex uartRxMutex_;
+    QWaitCondition canDataReady_;
 
     SerialPort *serialPort_ = nullptr;
     QThread *serialThread_ = nullptr;
     QThread *canParserThread_ = nullptr;
     SerialRxWorker *serialRxWorker_ = nullptr;
     CanParserWorker *canParserWorker_ = nullptr;
+    RobotController *robotController_ = nullptr;
 };
 
 #endif // MAINWINDOW_H

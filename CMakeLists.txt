@@ -41,7 +41,7 @@ else()
             damiao.h
             SerialPort.h
             serialcanworkers.h serialcanworkers.cpp
-
+            robotcontroller.h robotcontroller.cpp
         )
     endif()
 endif()

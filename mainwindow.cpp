@@ -3,6 +3,7 @@
 #include "SerialPort.h"
 #include "plotwidget.h"
 #include "serialcanworkers.h"
+#include "robotcontroller.h"
 
 #include <QCloseEvent>
 #include <QComboBox>
@@ -181,6 +182,9 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle(QStringLiteral("轻擎机械臂运动控制台"));
     resize(1600, 900);
 
+    // 创建机器人控制器
+    robotController_ = new RobotController(this);
+
     auto *central = new QWidget;
     auto *root = new QHBoxLayout(central);
     root->setSpacing(12);
@@ -242,6 +246,15 @@ MainWindow::MainWindow(QWidget *parent)
     connect(setDurationBtn_, &QPushButton::clicked, this, &MainWindow::onSetDurationClicked);
     connect(enableBtn_, &QPushButton::clicked, this, &MainWindow::onEnableClicked);
     connect(disableBtn_, &QPushButton::clicked, this, &MainWindow::onDisableClicked);
+    connect(initTrackBtn_, &QPushButton::clicked, this, &MainWindow::onInitTrackClicked);
+    connect(teachBtn_, &QPushButton::clicked, this, &MainWindow::onTeachClicked);
+    connect(runAlgoBtn_, &QPushButton::clicked, this, &MainWindow::onRunAlgoClicked);
+
+    // 连接RobotController的信号
+    connect(robotController_, &RobotController::jointStateChanged, this, &MainWindow::onJointStateUpdated);
+    connect(robotController_, &RobotController::controlCommandSent, this, &MainWindow::onControlCommandSent);
+    connect(robotController_, &RobotController::controlStatusChanged, this, &MainWindow::onControlStatusChanged);
+    connect(robotController_, &RobotController::logMessage, this, &MainWindow::appendLog);
 
     this->onRefreshDevicesClicked();
 }
@@ -249,6 +262,9 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow()
 {
     stopWorkers();
+    if (robotController_) {
+        robotController_->stopControl();
+    }
     delete serialPort_;
     serialPort_ = nullptr;
 }
@@ -337,12 +353,12 @@ void MainWindow::onSetDurationClicked()
     appendLog(QStringLiteral("总时长设置为 %1 秒").arg(sec));
 }
 
-void MainWindow::onJointStateUpdated(int jointIndex, float position, float velocity)
+void MainWindow::onJointStateUpdated(const JointState &state)
 {
     appendLog(QStringLiteral("关节%1: Pos=%2 Vel=%3")
-                  .arg(jointIndex)
-                  .arg(position, 0, 'f', 3)
-                  .arg(velocity, 0, 'f', 3));
+                  .arg(state.jointIndex)
+                  .arg(state.position, 0, 'f', 3)
+                  .arg(state.velocity, 0, 'f', 3));
 }
 
 void MainWindow::startWorkers()
@@ -355,8 +371,8 @@ void MainWindow::startWorkers()
     canParserThread_ = new QThread(this);
 
     serialRxWorker_ = new SerialRxWorker(serialPort_, &canRxFifo_, &uartRxFifo_,
-                                         &canRxMutex_, &uartRxMutex_);
-    canParserWorker_ = new CanParserWorker(&canRxFifo_, &canRxMutex_);
+                                         &canRxMutex_, &uartRxMutex_, &canDataReady_);
+    canParserWorker_ = new CanParserWorker(&canRxFifo_, &canRxMutex_, &canDataReady_);
     //决定这个 QObject 的槽函数将在哪个线程执行,此处表示将serialRxWorker_中的所有槽函数的执行权转移到serialThread_线程中
     serialRxWorker_->moveToThread(serialThread_);
     canParserWorker_->moveToThread(canParserThread_);
@@ -367,25 +383,35 @@ void MainWindow::startWorkers()
     connect(serialRxWorker_, &SerialRxWorker::logMessage, this, &MainWindow::appendLog);
     connect(canParserWorker_, &CanParserWorker::logMessage, this, &MainWindow::appendLog);
     connect(canParserWorker_, &CanParserWorker::jointStateUpdated,
-            this, &MainWindow::onJointStateUpdated);
+            robotController_, &RobotController::updateJointState);
 
+            
     connect(serialThread_, &QThread::finished, serialRxWorker_, &QObject::deleteLater);
     connect(canParserThread_, &QThread::finished, canParserWorker_, &QObject::deleteLater);
 
     serialThread_->start();
     canParserThread_->start();
 
+    // 设置串口到RobotController
+    if (robotController_) {
+        robotController_->setSerialPort(serialPort_);
+    }
+
     appendLog(QStringLiteral("后台线程启动完成"));
 }
 
 void MainWindow::stopWorkers()
 {
+    // 先通知停止
     if (serialRxWorker_) {
         serialRxWorker_->stop();
     }
     if (canParserWorker_) {
         canParserWorker_->stop();
     }
+
+    // 唤醒可能阻塞在条件变量上的消费者线程
+    canDataReady_.wakeAll();
 
     if (serialThread_) {
         serialThread_->quit();
@@ -408,67 +434,49 @@ void MainWindow::stopWorkers()
 
 void MainWindow::EnableMotor()
 {
-    if(!serialPort_) return;
-
-    const uint8_t enableCmd[9] =
-        {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xfc,0x88};
-
-    const uint8_t canIds[3] = {0x01,0x02,0x03};
-
-    const uint8_t head[21] =
-        {0x55,0xaa,0x1e,0x01,0x01,0x00,0x00,0x00,
-         0x0a,0x00,0x00,0x00,0x00,0x01,0x00,0x00,
-         0x00,0x00,0x08,0x00,0x00};
-
-    uint8_t frame[30];
-
-    for(int i=0;i<3;i++)
-    {
-        memset(frame, 0, 30);
-
-        memcpy(frame, head, 21);
-
-        // 写入 CAN ID
-        frame[13] = canIds[i];
-
-        // 写入 Enable 指令
-        memcpy(frame+21, enableCmd, 9);
-
-        serialPort_->send(frame, 30);
-
-        usleep(1000); // 防止CAN丢帧
+    if(robotController_) {
+        robotController_->enableMotors();
     }
 }
 
 
 void MainWindow::DisableMotor()
 {
-    if(!serialPort_) return;
-
-    const uint8_t disableCmd[9] =
-        {0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xfd,0x77};
-
-    const uint8_t canIds[3] = {0x01,0x02,0x03};
-
-    const uint8_t head[21] =
-        {0x55,0xaa,0x1e,0x01,0x01,0x00,0x00,0x00,
-         0x0a,0x00,0x00,0x00,0x00,0x01,0x00,0x00,
-         0x00,0x00,0x08,0x00,0x00};
-
-    uint8_t frame[30];
-
-    for(int i=0;i<3;i++)
-    {
-        memset(frame, 0, 30);
-
-        memcpy(frame, head, 21);
-
-        frame[13] = canIds[i];
-
-        memcpy(frame+21, disableCmd, 9);
-
-        serialPort_->send(frame, 30);
-
-        usleep(1000);
+    if(robotController_) {
+        robotController_->disableMotors();
     }
+}
+
+void MainWindow::onInitTrackClicked()
+{
+    if(robotController_) {
+        robotController_->initTrajectoryTracking();
+    }
+}
+
+void MainWindow::onTeachClicked()
+{
+    appendLog(QStringLiteral("示教模式（待实现）"));
+}
+
+void MainWindow::onRunAlgoClicked()
+{
+    if(robotController_) {
+        robotController_->startControl();
+    }
+}
+
+void MainWindow::onControlCommandSent(int jointIndex, float targetPos, float targetVel)
+{
+    // 可以在这里更新图表或显示信息
+    // appendLog(QStringLiteral("关节%1控制: Pos=%2 Vel=%3")
+    //               .arg(jointIndex)
+    //               .arg(targetPos, 0, 'f', 3)
+    //               .arg(targetVel, 0, 'f', 3));
+}
+
+void MainWindow::onControlStatusChanged(bool running)
+{
+    QString status = running ? QStringLiteral("运行中") : QStringLiteral("已停止");
+    appendLog(QStringLiteral("控制状态: %1").arg(status));
 }

@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QMutex>
+#include <QWaitCondition>
 #include <atomic>
 #include <array>
 #include <cstdint>
@@ -17,6 +18,7 @@ class SerialRxWorker : public QObject
 public:
     SerialRxWorker(SerialPort *serial, FIFO *canRxFifo, FIFO *uartRxFifo,
                    QMutex *canMutex, QMutex *uartMutex,
+                   QWaitCondition *canDataReady,
                    QObject *parent = nullptr);
     enum class ExtractResult
     {
@@ -42,6 +44,7 @@ private:
     FIFO *uartRxFifo_ = nullptr;
     QMutex *canMutex_ = nullptr;
     QMutex *uartMutex_ = nullptr;
+    QWaitCondition *canDataReady_ = nullptr;
     std::atomic_bool running_{false};
 
 };
@@ -50,7 +53,9 @@ class CanParserWorker : public QObject
 {
     Q_OBJECT
 public:
-    CanParserWorker(FIFO *canRxFifo, QMutex *canMutex, QObject *parent = nullptr);
+    CanParserWorker(FIFO *canRxFifo, QMutex *canMutex,
+                    QWaitCondition *canDataReady,
+                    QObject *parent = nullptr);
 
 public slots:
     void start();
@@ -73,6 +78,7 @@ private:
     float uintToFloat(int x_int, float x_min, float x_max, int bits) const;
     FIFO *canRxFifo_ = nullptr;
     QMutex *canMutex_ = nullptr;
+    QWaitCondition *canDataReady_ = nullptr;
     std::atomic_bool running_{false};
 };
 

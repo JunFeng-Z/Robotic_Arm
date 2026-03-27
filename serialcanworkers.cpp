@@ -7,6 +7,7 @@
 //////////////////////////////////SerialRxWorker class Start////////////////////////////////////////
 SerialRxWorker::SerialRxWorker(SerialPort *serial, FIFO *canRxFifo, FIFO *uartRxFifo,
                                QMutex *canMutex, QMutex *uartMutex,
+                               QWaitCondition *canDataReady,
                                QObject *parent)
     : QObject(parent)
     , serial_(serial)
@@ -14,6 +15,7 @@ SerialRxWorker::SerialRxWorker(SerialPort *serial, FIFO *canRxFifo, FIFO *uartRx
     , uartRxFifo_(uartRxFifo)
     , canMutex_(canMutex)
     , uartMutex_(uartMutex)
+    , canDataReady_(canDataReady)
 {
 }
 
@@ -63,6 +65,7 @@ void SerialRxWorker::start()
                 }
                 QMutexLocker canLock(canMutex_);
                 canRxFifo_->WriteBuffer(canFrame.data(), 0, 16);
+                canDataReady_->wakeOne();  // 唤醒消费者
             }
             else if (result == ExtractResult::NeedMoreData)
             {
@@ -153,16 +156,19 @@ SerialRxWorker::ExtractResult SerialRxWorker::tryExtractCanFrame(std::vector<uin
 
 //////////////////////////////////CanParserWorker class Satrt////////////////////////////////////////
 
-CanParserWorker::CanParserWorker(FIFO *canRxFifo, QMutex *canMutex, QObject *parent)
+CanParserWorker::CanParserWorker(FIFO *canRxFifo, QMutex *canMutex,
+                                 QWaitCondition *canDataReady,
+                                 QObject *parent)
     : QObject(parent)
     , canRxFifo_(canRxFifo)
     , canMutex_(canMutex)
+    , canDataReady_(canDataReady)
 {
 }
 
 void CanParserWorker::start()
 {
-    if (!canRxFifo_ || !canMutex_) {
+    if (!canRxFifo_ || !canMutex_ || !canDataReady_) {
         emit logMessage(QStringLiteral("CAN解析线程启动失败：依赖为空"));
         return;
     }
@@ -175,15 +181,19 @@ void CanParserWorker::start()
         bool hasFrame = false;
         {
             QMutexLocker locker(canMutex_);
-            if (canRxFifo_->GetDataCount() >= 16) {
-                canRxFifo_->ReadBuffer(frame.data(), 0, 16);
-                canRxFifo_->Clear(16);
-                hasFrame = true;
+            // 等待数据就绪，使用条件变量阻塞
+            while (canRxFifo_->GetDataCount() < 16 && running_.load()) {
+                canDataReady_->wait(canMutex_);
             }
+            if (!running_.load()) {
+                break;
+            }
+            canRxFifo_->ReadBuffer(frame.data(), 0, 16);
+            canRxFifo_->Clear(16);
+            hasFrame = true;
         }
 
         if (!hasFrame) {
-            QThread::msleep(1);
             continue;
         }
 
