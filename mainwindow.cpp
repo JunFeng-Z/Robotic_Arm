@@ -249,6 +249,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(initTrackBtn_, &QPushButton::clicked, this, &MainWindow::onInitTrackClicked);
     connect(teachBtn_, &QPushButton::clicked, this, &MainWindow::onTeachClicked);
     connect(runAlgoBtn_, &QPushButton::clicked, this, &MainWindow::onRunAlgoClicked);
+    connect(clearDataBtn_, &QPushButton::clicked, this, &MainWindow::onClearDataClicked);
 
     // 连接RobotController的信号
     connect(robotController_, &RobotController::jointStateChanged, this, &MainWindow::onJointStateUpdated);
@@ -463,6 +464,17 @@ void MainWindow::onRunAlgoClicked()
 {
     if(robotController_) {
         robotController_->startControl();
+        appendLog(QStringLiteral("控制算法已启动"));
+    }
+}
+
+void MainWindow::onClearDataClicked()
+{
+    //清除UI上所有的图表数据
+    //将轨迹跟踪中的索引设置回初始状态0
+    if(robotController_) {
+        robotController_->clearMoveIndex();
+        appendLog(QStringLiteral("预定轨迹索引已重置，图表数据已清除"));
     }
 }
 

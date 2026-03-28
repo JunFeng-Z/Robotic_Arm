@@ -45,6 +45,7 @@ private slots:
     void onRunAlgoClicked();
     void onControlCommandSent(int jointIndex, float targetPos, float targetVel);
     void onControlStatusChanged(bool running);
+    void onClearDataClicked();
 
 private:
     QGroupBox *buildConnectionPanel();

@@ -11,44 +11,12 @@
 #include <memory>
 #include <atomic>
 
+#include "robot_common.h"
+#include "robot_model.h"
+#include "trajectory_generator.h"
+
 class SerialPort;
 
-/**
- * @brief 关节状态数据结构
- */
-struct JointState
-{
-    int jointIndex;
-    float position;
-    float velocity;
-    float timestamp;  // 时间戳（秒）
-
-    JointState() : jointIndex(0), position(0), velocity(0), timestamp(0) {}
-    JointState(int idx, float pos, float vel, float t = 0)
-        : jointIndex(idx), position(pos), velocity(vel), timestamp(t) {}
-};
-
-/**
- * @brief 控制参数
- */
-struct ControlParams
-{
-    // 轨迹参数
-    float d1 = 1.0f;  // 轨迹参数1
-    float d2 = 1.0f;  // 轨迹参数2
-    float d3 = 1.0f;  // 轨迹参数3
-
-    // 控制器增益
-    float k1 = 0.5f;  // 位置增益
-    float k2 = 0.1f;  // 速度增益
-    float k3 = 1.0f;  // 前馈增益
-
-    // 控制周期（毫秒）
-    int controlPeriod = 10;  // 默认10ms = 100Hz
-
-    // 轨迹总时长（秒）
-    float trajectoryDuration = 6.0f;
-};
 
 /**
  * @brief 控制工作线程（独立线程执行控制算法）
@@ -66,6 +34,7 @@ public slots:
     void updateJointState(const JointState &state);
     void setControlParams(const ControlParams &params);
     void initTrajectory();
+    void clearMoveIndex();
 
 signals:
     void controlCommandSent(int jointIndex, float targetPos, float targetVel);
@@ -74,22 +43,30 @@ signals:
 
 private:
     void controlLoop();
-    QVector<float> computeDesiredTrajectory(float t) const;
+    Eigen::Vector3f computeDesiredTrajectory(float t) const;
     std::pair<float, float> computeControl(int jointIndex,
                                           const JointState &state,
-                                          const QVector<float> &desired) const;
-    void sendMotorCommand(int canId, float position, float velocity);
+                                          const Eigen::Vector3f& desired) const;
     float getCurrentTime() const;
+    void updateModelFromParams();  // 根据params_更新模型和生成器
 
 private:
     std::array<JointState, 4> jointStates_;  // 索引1-3对应关节1-3
     mutable QMutex stateMutex_;  // 保护关节状态
     ControlParams params_;
     mutable QMutex paramsMutex_;  // 保护参数
+
+    // 机器人模型和轨迹生成器
+    std::unique_ptr<RobotModel> robotModel_;
+    std::unique_ptr<TrajectoryGenerator> trajectoryGenerator_;
+    mutable QMutex modelMutex_;  // 保护模型和生成器
+
     std::atomic_bool running_{false};
     std::atomic_bool trajectoryInitialized_{false};
     float startTime_ = 0.0f;
     int controlPeriodMs_ = 10;
+
+    std::atomic_int moveIndex_{0};  // 预定义轨迹点的起始索引
 };
 
 /**
@@ -119,6 +96,11 @@ public:
      * @brief 启动控制循环
      */
     void startControl();
+
+    /**
+    * @brief 清除控制数据（由MainWindow调用）
+    */
+    void clearMoveIndex();
 
     /**
      * @brief 停止控制循环

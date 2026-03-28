@@ -11,6 +11,9 @@
 ControlWorker::ControlWorker(QObject *parent)
     : QObject(parent)
 {
+    // 创建默认的机器人模型和轨迹生成器
+    robotModel_ = std::make_unique<RobotModel>();
+    trajectoryGenerator_ = std::make_unique<TrajectoryGenerator>();
 }
 
 void ControlWorker::start()
@@ -49,6 +52,9 @@ void ControlWorker::setControlParams(const ControlParams &params)
     QMutexLocker locker(&paramsMutex_);
     params_ = params;
     controlPeriodMs_ = params.controlPeriod;
+
+    // 更新模型和生成器
+    updateModelFromParams();
 }
 
 void ControlWorker::initTrajectory()
@@ -56,6 +62,19 @@ void ControlWorker::initTrajectory()
     trajectoryInitialized_.store(true);
     startTime_ = getCurrentTime();
     emit logMessage(QStringLiteral("轨迹跟踪已初始化"));
+}
+
+void ControlWorker::updateModelFromParams()
+{
+    QMutexLocker locker(&modelMutex_);
+
+    if (robotModel_) {
+        robotModel_->setParameters(params_.robotParams);
+    }
+
+    if (trajectoryGenerator_) {
+        trajectoryGenerator_->setParameters(params_.trajectory);
+    }
 }
 //控制循环函数，持续计算控制命令并发送
 void ControlWorker::controlLoop()
@@ -73,7 +92,7 @@ void ControlWorker::controlLoop()
         // 检查是否超出轨迹时长
         {
             QMutexLocker locker(&paramsMutex_);
-            if (elapsedTime > params_.trajectoryDuration) {
+            if (elapsedTime > params_.trajectory.duration) {
                 emit logMessage(QStringLiteral("轨迹跟踪已完成，时长: %1秒").arg(elapsedTime, 0, 'f', 2));
                 emit controlStatusChanged(false);
                 running_.store(false);
@@ -82,7 +101,7 @@ void ControlWorker::controlLoop()
         }
 
         // 计算期望轨迹
-        QVector<float> desiredTrajectory = computeDesiredTrajectory(elapsedTime);
+        Eigen::Vector3f desiredTrajectory = computeDesiredTrajectory(elapsedTime);
 
         // 获取关节状态
         std::array<JointState, 4> currentStates;
@@ -112,25 +131,55 @@ void ControlWorker::controlLoop()
 
     emit controlStatusChanged(false);
 }
-
-QVector<float> ControlWorker::computeDesiredTrajectory(float t) const
+//界面按钮清除数据时调用，UI图清除，这里重置预定轨迹的起始运行索引
+void ControlWorker::clearMoveIndex()
 {
-    QMutexLocker locker(&paramsMutex_);
+    moveIndex_.store(0);
+    emit logMessage(QStringLiteral("预定轨迹索引已重置"));
+}
 
-    QVector<float> desired(4, 0.0f);  // 索引0不使用，1-3对应3个关节
+Eigen::Vector3f ControlWorker::computeDesiredTrajectory(float t) const
+{
+    QMutexLocker locker(&modelMutex_);
 
-    // 使用参数d1, d2, d3生成轨迹
-    // 示例：简单的正弦轨迹
-    float omega = 2.0f * M_PI / params_.trajectoryDuration;  // 角频率
+    Eigen::Vector3f desired = Eigen::Vector3f::Zero();
 
-    // 关节1
-    desired[1] = params_.d1 * std::sin(omega * t);
+    if (!trajectoryGenerator_ || !robotModel_) {
+        return desired;
+    }
 
-    // 关节2
-    desired[2] = params_.d2 * std::sin(omega * t + M_PI / 4.0f);
+    const TrajectoryParams &traj = params_.trajectory;
 
-    // 关节3 (取负，与硬件特性对应)
-    desired[3] = -params_.d3 * std::sin(omega * t + M_PI / 2.0f);
+    switch (traj.type) {
+    case TrajectoryType::Sine: {
+        // 正弦轨迹 (关节空间)
+        desired = trajectoryGenerator_->generateSineJointTrajectory(t);
+        break;
+    }
+    case TrajectoryType::Spiral: {
+        // 螺旋线轨迹 (工作空间 -> 关节空间)
+        TrajectoryPoint workspacePoint = trajectoryGenerator_->generateSpiralPoint(t);
+
+        // 通过逆运动学计算关节角度
+        Eigen::Vector3f position(workspacePoint.position[0],
+                                 workspacePoint.position[1],
+                                 workspacePoint.position[2]);
+
+        Eigen::Vector3f q;
+        bool success = robotModel_->inverseKinematics(position, q);
+        if (success) {
+            desired = q;
+        } else {
+            // 逆运动学失败，使用默认位置
+            desired.setZero();
+        }
+        break;
+    }
+    default:
+        // 未知轨迹类型，使用默认值
+        desired.setZero();
+        break;
+    }
 
     return desired;
 }
@@ -138,12 +187,13 @@ QVector<float> ControlWorker::computeDesiredTrajectory(float t) const
 std::pair<float, float> ControlWorker::computeControl(
     int jointIndex,
     const JointState &state,
-    const QVector<float> &desired) const
+    const Eigen::Vector3f& desired) const
 {
     QMutexLocker locker(&paramsMutex_);
 
     // 获取期望位置和速度
-    float desiredPos = (jointIndex <= desired.size()) ? desired[jointIndex] : 0.0f;
+    // jointIndex: 1-3 对应 desired[0]-[2]
+    float desiredPos = (jointIndex >= 1 && jointIndex <= 3) ? desired[jointIndex-1] : 0.0f;
     float desiredVel = 0.0f;  // 可以根据需要计算期望速度
 
     // 计算位置误差
@@ -166,14 +216,6 @@ std::pair<float, float> ControlWorker::computeControl(
     return {targetPos, targetVel};
 }
 
-void ControlWorker::sendMotorCommand(int canId, float position, float velocity)
-{
-    // 这个方法实际上不在这里发送，而是通过信号发送到RobotController
-    // RobotController负责实际的串口发送
-    Q_UNUSED(canId)
-    Q_UNUSED(position)
-    Q_UNUSED(velocity)
-}
 
 float ControlWorker::getCurrentTime() const
 {
@@ -260,6 +302,14 @@ void RobotController::startControl()
 
     // 启动工作线程的控制循环
     QMetaObject::invokeMethod(worker_, "start", Qt::QueuedConnection);
+}
+
+void RobotController::clearMoveIndex()
+{
+
+    if (worker_) {
+        QMetaObject::invokeMethod(worker_, "clearMoveIndex", Qt::QueuedConnection);
+    }
 }
 
 void RobotController::stopControl()
@@ -405,3 +455,4 @@ float RobotController::getCurrentTime() const
 {
     return static_cast<float>(QDateTime::currentMSecsSinceEpoch()) / 1000.0f;
 }
+

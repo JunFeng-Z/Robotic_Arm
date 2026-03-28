@@ -42,6 +42,9 @@ else()
             SerialPort.h
             serialcanworkers.h serialcanworkers.cpp
             robotcontroller.h robotcontroller.cpp
+            robot_common.h
+            robot_model.h robot_model.cpp
+            trajectory_generator.h trajectory_generator.cpp
         )
     endif()
 endif()
