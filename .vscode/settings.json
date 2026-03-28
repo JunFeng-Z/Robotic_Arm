@@ -1,0 +1,5 @@
+{
+    "cmake.configureArgs": [
+        "-DCMAKE_PREFIX_PATH=/home/jf/Qt/5.15.2/gcc_64"
+    ]
+}
