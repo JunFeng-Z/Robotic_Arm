@@ -2,6 +2,7 @@
 #define MAINWINDOW_H
 
 #include "FIFO.h"
+#include "robot_common.h"
 
 #include <QMainWindow>
 #include <QMutex>
@@ -59,6 +60,8 @@ private:
     void EnableMotor();
     void DisableMotor();
 
+    void adjustParameter(int index, float delta);
+
 
     QTextEdit *logText_ = nullptr;
 
@@ -96,6 +99,7 @@ private:
     SerialRxWorker *serialRxWorker_ = nullptr;
     CanParserWorker *canParserWorker_ = nullptr;
     RobotController *robotController_ = nullptr;
+    ControlParams controlParams_;
 };
 
 #endif // MAINWINDOW_H

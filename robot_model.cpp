@@ -11,20 +11,56 @@ void RobotModel::setParameters(const RobotParams& params)
     params_ = params;
 }
 
+void RobotModel::CalculateSList()
+{
+   // 关节1的z轴在基座的z轴，通过原点
+     Vector3d omega1({0, 0, 1});
+     Vector3d q_point1({0, 0, 0}); // 关节1的z轴通过原点
+     Vector3d v1 = -omega1.cross(q_point1); // v = -omega x q_point
+    
+    S1.segment(0, 3) = omega1;
+    S1.segment(3, 3) = v1;
+
+    // 关节2的z轴在关节1的x-y平面内，随q1旋转
+    // R0_1_zero 是q1=0时的旋转矩阵，即I
+    // R0_1_zero * [0; 0; 1] = [0; 0; 1]
+    // 但MATLAB代码中是绕-Y轴，所以omega2 = [0; -1; 0]
+     Vector3d omega2({0, -1, 0}); // 绕-Y轴
+     Vector3d q_point2({0, 0, 0}); // 关节2的z轴通过原点 (q1=0时)
+     Vector3d v2 = -omega2.cross(q_point2);
+  
+    S2.segment(0, 3) = omega2;
+    S2.segment(3, 3) = v2;
+
+    // 关节3的z轴也绕-Y轴，但作用点在关节2的X方向上，距离为l2
+     Vector3d omega3({0, -1, 0}); // 绕-Y轴
+    double l2 = params_.dh[1].a; // 从参数中获取
+     Vector3d q_point3({l2, 0, 0}); // 关节3的z轴通过(l2, 0, 0)点 (q1=q2=0时)
+     Vector3d v3 = -omega3.cross(q_point3); // v = -omega x q_point = -[-y, x, 0] = [y, -x, 0] = [0, l2, 0]
+
+    S3.segment(0, 3) = omega3;
+    S3.segment(3, 3) = v3;
+}
 // ==================== 运动学计算 ====================
 
 bool RobotModel::forwardKinematics(const Vector3f& q, Vector3f& position) const
 {
-    // 简化的正运动学，根据C#代码中的模型
-    // 假设为平面3关节机器人，关节1绕Z轴，关节2和3在XY平面
-    const float a2 = params_.dh[1].a;  // 0.12
-    const float a3 = params_.dh[2].a;  // 0.12
+   // 将输入的关节角转换为double
+    VectorXd q_d = q.cast<double>();
+    double q1 = q_d(0);
+    double q2 = q_d(1);
+    double q3 = q_d(2);
 
-    float q1 = q[0], q2 = q[1], q3 = q[2];
+    // --- 计算指数映射 ---
+     Matrix4d T1 = expm_screw(S1, q1);
+     Matrix4d T2 = expm_screw(S2, q2);
+     Matrix4d T3 = expm_screw(S3, q3);
 
-    position[0] = a2 * std::cos(q1) * std::cos(q2) + a3 * std::cos(q1) * std::cos(q2 + q3);
-    position[1] = a2 * std::sin(q1) * std::cos(q2) + a3 * std::sin(q1) * std::cos(q2 + q3);
-    position[2] = a2 * std::sin(q2) + a3 * std::sin(q2 + q3);
+    // --- 使用预计算的零位位姿 ---
+     Matrix4d T_total = T1 * T2 * T3 * zero_config_pose_M_;
+
+    // --- 提取位置 ---
+    position = T_total.block<3, 1>(0, 3).cast<float>();
 
     return true;
 }
@@ -95,20 +131,428 @@ bool RobotModel::inverseKinematics(const Vector3f& position, Vector3f& q, int el
 
 Matrix3f RobotModel::computeJacobian(const Vector3f& q) const
 {
-    // 简化的雅可比矩阵计算
-    // TODO: 实现完整的雅可比矩阵计算
-    Matrix3f J;
-    J.setZero();
-    return J;
+    // 将输入关节角转换为double
+     Vector3d q_d = q.cast<double>();
+    double q1 = q_d(0);
+    double q2 = q_d(1);
+    double q3 = q_d(2);
+    
+    // 计算指数映射
+     Matrix4d T1 = expm_screw(S1, q1);
+     Matrix4d T2 = expm_screw(S2, q2);
+     Matrix4d T3 = expm_screw(S3, q3);
+    
+    // 计算末端位姿
+     Matrix4d T_total = T1 * T2 * T3 * zero_config_pose_M_;
+    
+    // 提取末端位置p3_exp
+     Vector3d p3_exp = T_total.block<3, 1>(0, 3);
+    
+    // 计算空间雅可比Js
+    Eigen::Matrix<double, 6, 3> J_s;
+    
+    // 第一列: Js1 = S1
+    J_s.col(0) = S1;
+    
+    // 第二列: Js2 = adjoint(T1) * S2
+    // 需要先实现adjoint函数
+    Matrix6d Ad_T1 = adjoint(T1);
+    J_s.col(1) = Ad_T1 * S2;
+    
+    // 第三列: Js3 = adjoint(T1*T2) * S3
+     Matrix4d T12 = T1 * T2;
+    Matrix6d Ad_T12 = adjoint(T12);
+    J_s.col(2) = Ad_T12 * S3;
+    
+    // 分离角速度和线速度部分
+     Matrix3d J_s_angular = J_s.block<3, 3>(0, 0);  // 角速度部分
+     Matrix3d J_s_linear = J_s.block<3, 3>(3, 0);   // 线速度部分
+    
+    // 计算几何雅可比: jacobian = -skew(p3_exp) * J_s(1:3,:) + J_s(4:6,:)
+     Matrix3d p_hat = skew(p3_exp);
+     Matrix3d J_geometric = J_s_linear - p_hat * J_s_angular;
+    
+    // 转换为float返回
+    return J_geometric.cast<float>();
 }
+
+//=========================实现逆速度计算========================
+//自行实现的基于史密斯正交化的QR分解方法，适用于3x3雅可比矩阵
+bool RobotModel::inverseVelocity(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) const
+{
+    // 检查雅可比矩阵是否有效
+    if (J.hasNaN() || J.maxCoeff() > 1e6f || J.minCoeff() < -1e6f) {
+        return false;
+    }
+    
+    // 对雅可比矩阵进行Gram-Schmidt正交化（QR分解的手工实现）
+    // 提取雅可比的列向量
+    Eigen::Vector3f J1 = J.col(0);
+    Eigen::Vector3f J2 = J.col(1);
+    Eigen::Vector3f J3 = J.col(2);
+    
+    // 计算正交基e1, e2, e3
+    Eigen::Vector3f e1, e2, e3;
+    
+    // 计算e1
+    float norm_J1 = J1.norm();
+    if (norm_J1 < 1e-6f) {
+        return false; // 雅可比矩阵奇异
+    }
+    e1 = J1 / norm_J1;
+    
+    // 计算e2
+    Eigen::Vector3f e2_raw = J2 - (J2.dot(e1)) * e1;
+    float norm_e2_raw = e2_raw.norm();
+    if (norm_e2_raw < 1e-6f) {
+        return false; // 雅可比矩阵奇异
+    }
+    e2 = e2_raw / norm_e2_raw;
+    
+    // 计算e3
+    Eigen::Vector3f e3_raw = J3 - (J3.dot(e1)) * e1 - (J3.dot(e2)) * e2;
+    float norm_e3_raw = e3_raw.norm();
+    if (norm_e3_raw < 1e-6f) {
+        return false; // 雅可比矩阵奇异
+    }
+    e3 = e3_raw / norm_e3_raw;
+    
+    // 构造正交矩阵Q
+    Eigen::Matrix3f Q_M;
+    Q_M.col(0) = e1;
+    Q_M.col(1) = e2;
+    Q_M.col(2) = e3;
+    
+    // 计算上三角矩阵R = Q^T * J
+    Eigen::Matrix3f R_M = Q_M.transpose() * J;
+    
+    // 检查R_M的对角元素（避免除零）
+    if (std::abs(R_M(0, 0)) < 1e-6f || 
+        std::abs(R_M(1, 1)) < 1e-6f || 
+        std::abs(R_M(2, 2)) < 1e-6f) {
+        return false;
+    }
+    
+    // 解上三角线性方程组 R * qd = Q^T * v
+    Eigen::Vector3f y = Q_M.transpose() * end_vel;
+    
+    // 回代求解
+    qd[2] = y[2] / R_M(2, 2);
+    qd[1] = (y[1] - R_M(1, 2) * qd[2]) / R_M(1, 1);
+    qd[0] = (y[0] - R_M(0, 1) * qd[1] - R_M(0, 2) * qd[2]) / R_M(0, 0);
+    
+    return true;
+}
+// 使用Eigen内置的QR分解方法，适用于3x3雅可比矩阵
+bool RobotModel::inverseVelocityQR(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) const
+{
+    // 检查雅可比矩阵是否有效
+    if (J.hasNaN() || J.maxCoeff() > 1e6f || J.minCoeff() < -1e6f) {
+        return false;
+    }
+    
+    // 使用Eigen内置的ColPivHouseholderQR分解
+    // 这种分解可以处理奇异矩阵，并提供最小二乘解
+    Eigen::ColPivHouseholderQR<Matrix3f> qr(J);
+    
+    if (!qr.isInvertible()) {
+        // 雅可比矩阵奇异，无法求解
+        return false;
+    }
+    
+    // 求解 J * qd = end_vel
+    qd = qr.solve(end_vel);
+    
+    return true;
+}
+// 使用阻尼最小二乘法的逆速度计算，适用于接近奇异的雅可比矩阵
+bool RobotModel::inverseVelocityDamped(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd, float lambda) const
+{
+    // 检查雅可比矩阵是否有效
+    if (J.hasNaN() || J.maxCoeff() > 1e6f || J.minCoeff() < -1e6f) {
+        return false;
+    }
+    
+    // 使用阻尼最小二乘法 (DLS)
+    // 解: qd = (J^T * J + λ^2 * I)^(-1) * J^T * v
+    Matrix3f I = Matrix3f::Identity();
+    Matrix3f A = J.transpose() * J + lambda * lambda * I;
+    
+    // 检查A是否可逆
+    float det = A.determinant();
+    if (std::abs(det) < 1e-12f) {
+        return false;
+    }
+    
+    qd = A.inverse() * J.transpose() * end_vel;
+    
+    return true;
+}
+
+//正向计算连杆末端速度，输入关节角和关节速度，输出末端线速度
+Vector3f RobotModel::forwardVelocity(const Vector3f& q, const Vector3f& qd) const
+{
+    // 将关节角转换为double
+    Eigen::Vector3d q_d = q.cast<double>();
+    Eigen::Vector3d qd_d = qd.cast<double>();
+    
+    double q1 = q_d[0], q2 = q_d[1], q3 = q_d[2];
+    double qd1 = qd_d[0], qd2 = qd_d[1], qd3 = qd_d[2];
+    
+    const double l2 = params_.dh[1].a;
+    const double l3 = params_.dh[2].a;
+    
+    // 1. 根据DH参数构建变换矩阵
+    Eigen::Matrix4d T0_1, T1_2, T2_3;
+    
+    // T0_1
+    double c1 = cos(q1), s1 = sin(q1);
+    T0_1 << c1,  0,  s1,  0,
+            s1,  0, -c1,  0,
+            0,   1,  0,   0,
+            0,   0,  0,   1;
+    
+    // T1_2
+    double c2 = cos(q2), s2 = sin(q2);
+    T1_2 << c2, -s2,  0,  l2 * c2,
+            s2,  c2,  0,  l2 * s2,
+            0,   0,   1,  0,
+            0,   0,   0,  1;
+    
+    // T2_3
+    double c3 = cos(q3), s3 = sin(q3);
+    T2_3 << c3, -s3,  0,  l3 * c3,
+            s3,  c3,  0,  l3 * s3,
+            0,   0,   1,  0,
+            0,   0,   0,  1;
+    
+    // 2. 计算逆变换矩阵
+    Eigen::Matrix4d T0_1_inv = T0_1.inverse();
+    Eigen::Matrix4d T1_2_inv = T1_2.inverse();
+    Eigen::Matrix4d T2_3_inv = T2_3.inverse();
+    
+    // 3. 计算伴随变换 adjoint(inv_transform(T))
+    Eigen::Matrix<double, 6, 6> Ad_T0_1_inv = adjoint(T0_1_inv);
+    Eigen::Matrix<double, 6, 6> Ad_T1_2_inv = adjoint(T1_2_inv);
+    Eigen::Matrix<double, 6, 6> Ad_T2_3_inv = adjoint(T2_3_inv);
+    
+    // 4. 计算零位变换矩阵（根据你提供的MATLAB代码）
+    Eigen::Matrix4d M1, M2, M3;
+    
+    // M1 = T0_1_zero
+    M1 << 1, 0, 0, 0,
+          0, 0, -1, 0,
+          0, 1, 0, 0,
+          0, 0, 0, 1;
+    
+    // M2 = T0_1_zero * T1_2_zero
+    Eigen::Matrix4d T1_2_zero;
+    T1_2_zero << 1, 0, 0, l2,
+                 0, 1, 0, 0,
+                 0, 0, 1, 0,
+                 0, 0, 0, 1;
+    M2 = M1 * T1_2_zero;
+    
+    // M3 = T0_1_zero * T1_2_zero * T2_3_zero
+    Eigen::Matrix4d T2_3_zero;
+    T2_3_zero << 1, 0, 0, l3,
+                 0, 1, 0, 0,
+                 0, 0, 1, 0,
+                 0, 0, 0, 1;
+    M3 = M2 * T2_3_zero;
+    
+    // 5. 计算空间旋量 A_i = adjoint(inv(M_i)) * S_i
+    Eigen::Matrix<double, 6, 6> Ad_M1_inv = adjoint(M1.inverse());
+    Eigen::Matrix<double, 6, 6> Ad_M2_inv = adjoint(M2.inverse());
+    Eigen::Matrix<double, 6, 6> Ad_M3_inv = adjoint(M3.inverse());
+    
+    Eigen::VectorXd A1 = Ad_M1_inv * S1;
+    Eigen::VectorXd A2 = Ad_M2_inv * S2;
+    Eigen::VectorXd A3 = Ad_M3_inv * S3;
+    
+    // 6. 速度递推
+    Eigen::VectorXd V0 = Eigen::VectorXd::Zero(6);  // 基座速度为零
+    
+    // V1 = A1 * qd1 + adjoint(inv(T0_1)) * V0
+    Eigen::VectorXd V1 = A1 * qd1 + Ad_T0_1_inv * V0;
+    
+    // V2 = A2 * qd2 + adjoint(inv(T1_2)) * V1
+    Eigen::VectorXd V2 = A2 * qd2 + Ad_T1_2_inv * V1;
+    
+    // V3 = A3 * qd3 + adjoint(inv(T2_3)) * V2
+    Eigen::VectorXd V3 = A3 * qd3 + Ad_T2_3_inv * V2;
+    
+    // 7. 提取末端线速度（旋量的后3个元素）
+    Eigen::Vector3d end_vel = V3.segment(3, 3);
+    
+    return end_vel.cast<float>();
+}
+
 
 Matrix3f RobotModel::computeJacobianDerivative(const Vector3f& q, const Vector3f& qd) const
 {
-    // TODO: 实现雅可比矩阵导数计算
-    Matrix3f dJ;
-    dJ.setZero();
-    return dJ;
+// 转换为double精度
+    Eigen::Vector3d q_d = q.cast<double>();
+    Eigen::Vector3d qd_d = qd.cast<double>();
+    
+    double q1 = q_d[0], q2 = q_d[1], q3 = q_d[2];
+    double qd1 = qd_d[0], qd2 = qd_d[1], qd3 = qd_d[2];
+    
+    // 1. 计算变换矩阵
+    Eigen::Matrix4d T1 = expm_screw(S1, q1);
+    Eigen::Matrix4d T2 = expm_screw(S2, q2);
+    
+    // 2. 计算空间雅可比 J_s
+    Eigen::Matrix<double, 6, 3> J_s;
+    J_s.col(0) = S1;
+    J_s.col(1) = adjoint(T1) * S2;
+    J_s.col(2) = adjoint(T1 * T2) * S3;
+    
+    // 3. 计算空间雅可比导数 dJ_s
+    Eigen::Matrix<double, 6, 3> dJ_s = Eigen::Matrix<double, 6, 3>::Zero();
+    
+    // 计算空间雅可比导数（李括号法）
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < i; ++j) {
+            Eigen::VectorXd J_s_j = J_s.col(j);
+            Eigen::VectorXd J_s_i = J_s.col(i);
+            
+            // dJ_s(:,i) = dJ_s(:,i) + ad(J_s(:,j)) * J_s(:,i) * qd(j)
+            Eigen::Matrix<double, 6, 6> ad_J_s_j = ad(J_s_j);
+            dJ_s.col(i) += ad_J_s_j * J_s_i * qd_d[j];
+        }
+    }
+    
+    // 4. 计算末端位置
+    Eigen::Matrix4d T3 = expm_screw(S3, q3);
+    Eigen::Matrix4d T_total = T1 * T2 * T3 * zero_config_pose_M_;
+    Eigen::Vector3d p_tcp = T_total.block<3, 1>(0, 3);
+    
+    // 5. 计算末端速度 v_tcp = J_geo * qd
+    Eigen::Matrix3d J_s_angular = J_s.block<3, 3>(0, 0);
+    Eigen::Matrix3d J_s_linear = J_s.block<3, 3>(3, 0);
+    
+    // 几何雅可比: J_geo = J_s_v - p_hat * J_s_omega
+    Eigen::Matrix3d p_hat = skew(p_tcp);
+    Eigen::Matrix3d J_geo = J_s_linear - p_hat * J_s_angular;
+    
+    Eigen::Vector3d v_tcp = J_geo * qd_d;
+    
+    // 6. 分离dJ_s的角速度和线速度部分
+    Eigen::Matrix3d dJ_s_angular = dJ_s.block<3, 3>(0, 0);
+    Eigen::Matrix3d dJ_s_linear = dJ_s.block<3, 3>(3, 0);
+    
+    // 7. 计算几何雅可比导数
+    // dJ_geo = dJ_s_v - skew(v_tcp) * J_s_omega - skew(p_tcp) * dJ_s_omega
+    Eigen::Matrix3d v_hat = skew(v_tcp);
+    
+    Eigen::Matrix3d dJ_geo = dJ_s_linear
+                           - v_hat * J_s_angular
+                           - p_hat * dJ_s_angular;
+    
+    return dJ_geo.cast<float>();
 }
+
+
+bool RobotModel::inverseAcceleration(const Vector3f& q, const Vector3f& qd, 
+                                     const Vector3f& end_acc, Vector3f& qdd) const
+{
+    // 1. 计算当前关节角下的雅可比矩阵
+    Matrix3f J = computeJacobian(q);
+    
+    // 2. 计算雅可比导数
+    Matrix3f dJ = computeJacobianDerivative(q, qd);
+    
+    // 3. 对雅可比矩阵进行QR分解
+    // 提取雅可比的列向量
+    Eigen::Vector3f J1 = J.col(0);
+    Eigen::Vector3f J2 = J.col(1);
+    Eigen::Vector3f J3 = J.col(2);
+    
+    // 计算正交基e1, e2, e3
+    Eigen::Vector3f e1, e2, e3;
+    
+    // 计算e1
+    float norm_J1 = J1.norm();
+    if (norm_J1 < 1e-6f) {
+        return false; // 雅可比矩阵奇异
+    }
+    e1 = J1 / norm_J1;
+    
+    // 计算e2
+    Eigen::Vector3f e2_raw = J2 - (J2.dot(e1)) * e1;
+    float norm_e2_raw = e2_raw.norm();
+    if (norm_e2_raw < 1e-6f) {
+        return false; // 雅可比矩阵奇异
+    }
+    e2 = e2_raw / norm_e2_raw;
+    
+    // 计算e3
+    Eigen::Vector3f e3_raw = J3 - (J3.dot(e1)) * e1 - (J3.dot(e2)) * e2;
+    float norm_e3_raw = e3_raw.norm();
+    if (norm_e3_raw < 1e-6f) {
+        return false; // 雅可比矩阵奇异
+    }
+    e3 = e3_raw / norm_e3_raw;
+    
+    // 4. 构造正交矩阵Q
+    Matrix3f Q_M;
+    Q_M.col(0) = e1;
+    Q_M.col(1) = e2;
+    Q_M.col(2) = e3;
+    
+    // 5. 计算上三角矩阵R = Q^T * J
+    Matrix3f R_M = Q_M.transpose() * J;
+    
+    // 检查R_M是否奇异
+    if (std::abs(R_M(0, 0)) < 1e-6f || 
+        std::abs(R_M(1, 1)) < 1e-6f || 
+        std::abs(R_M(2, 2)) < 1e-6f) {
+        return false;
+    }
+    
+    // 6. 计算右端项: xdd = end_acc - dJ * qd
+    Vector3f xdd = end_acc - dJ * qd;
+    
+    // 7. 变换右端项: y_acc = Q^T * xdd
+    Vector3f y_acc = Q_M.transpose() * xdd;
+    
+    // 8. 回代求解上三角方程组 R * qdd = y_acc
+    qdd[2] = y_acc[2] / R_M(2, 2);
+    qdd[1] = (y_acc[1] - R_M(1, 2) * qdd[2]) / R_M(1, 1);
+    qdd[0] = (y_acc[0] - R_M(0, 1) * qdd[1] - R_M(0, 2) * qdd[2]) / R_M(0, 0);
+    
+    return true;
+}
+
+bool RobotModel::inverseAccelerationQR(const Vector3f& q, const Vector3f& qd, 
+                                       const Vector3f& end_acc, Vector3f& qdd) const
+{
+    // 1. 计算雅可比和雅可比导数
+    Matrix3f J = computeJacobian(q);
+    Matrix3f dJ = computeJacobianDerivative(q, qd);
+    
+    // 2. 使用Eigen的QR分解
+    Eigen::ColPivHouseholderQR<Matrix3f> qr(J);
+    
+    if (!qr.isInvertible()) {
+        return false; // 雅可比矩阵奇异
+    }
+    
+    // 3. 计算右端项: xdd = end_acc - dJ * qd
+    Vector3f xdd = end_acc - dJ * qd;
+    
+    // 4. 求解线性方程组 J * qdd = xdd
+    qdd = qr.solve(xdd);
+    
+    return true;
+}
+
+
+
+
+
+
 
 // ==================== 动力学计算 ====================
 
@@ -235,85 +679,124 @@ Vector3f RobotModel::computeGravityCompensation(const Vector3f& q) const
     return Vector3f(G1, G2, G3);
 }
 
-// ==================== 控制算法 ====================
 
-Vector3f RobotModel::computePDControl(const Vector3f& q_desired,
-                                     const Vector3f& qd_desired,
-                                     const Vector3f& q_current,
-                                     const Vector3f& qd_current,
-                                     const Matrix3f& Kp,
-                                     const Matrix3f& Kd) const
-{
-    Vector3f error = q_desired - q_current;
-    Vector3f error_dot = qd_desired - qd_current;
+Matrix4d RobotModel::dh_transform(double a, double alpha, double d, double theta) {
+    double ct = std::cos(theta);
+    double st = std::sin(theta);
+    double ca = std::cos(alpha);
+    double sa = std::sin(alpha);
 
-    return Kp * error + Kd * error_dot;
+    Matrix4d T;
+    T << ct, -st * ca, st * sa, a * ct,
+         st, ct * ca, -ct * sa, a * st,
+         0, sa, ca, d,
+         0, 0, 0, 1;
+    return T;
 }
 
-Vector3f RobotModel::computeTorqueControl(const Vector3f& q_desired,
-                                         const Vector3f& qd_desired,
-                                         const Vector3f& qdd_desired,
-                                         const Vector3f& q_current,
-                                         const Vector3f& qd_current,
-                                         const Matrix3f& Kp,
-                                         const Matrix3f& Kd) const
+void RobotModel::calculateZeroConfigPoseM()
 {
-    // 计算力矩控制: τ = M(q)(qdd_desired + Kp(q_desired-q) + Kd(qd_desired-qd)) + C(q,qd)qd + G(q)
-    Vector3f error = q_desired - q_current;
-    Vector3f error_dot = qd_desired - qd_current;
+    // 从params_获取DH参数，并设置关节角为0
+    double a1 = params_.dh[0].a; double alpha1 = params_.dh[0].alpha; double d1 = params_.dh[0].d; double theta1 = 0;
+    double a2 = params_.dh[1].a; double alpha2 = params_.dh[1].alpha; double d2 = params_.dh[1].d; double theta2 = 0;
+    double a3 = params_.dh[2].a; double alpha3 = params_.dh[2].alpha; double d3 = params_.dh[2].d; double theta3 = 0;
 
-    Vector3f qdd_command = qdd_desired + Kp * error + Kd * error_dot;
+    // 计算零位时的变换矩阵
+     Matrix4d T0_1 = dh_transform(a1, alpha1, d1, theta1);
+     Matrix4d T1_2 = dh_transform(a2, alpha2, d2, theta2);
+     Matrix4d T2_3 = dh_transform(a3, alpha3, d3, theta3);
 
-    return computeInverseDynamics(q_current, qd_current, qdd_command);
+    // 零位位姿 = T0_1 * T1_2 * T2_3
+    zero_config_pose_M_ = T0_1 * T1_2 * T2_3;
 }
 
-Vector3f RobotModel::computeSlidingModeControl(const Vector3f& q_desired,
-                                              const Vector3f& qd_desired,
-                                              const Vector3f& q_current,
-                                              const Vector3f& qd_current,
-                                              const Vector3f& K,
-                                              const Vector3f& eta) const
-{
-    // 从C#代码移植的滑模控制
-    Vector3f error = q_desired - q_current;
-    Vector3f error_dot = qd_desired - qd_current;
-
-    Vector3f s = error_dot + K.cwiseProduct(error);
-
-    // 使用tanh函数代替符号函数，更平滑
-    Vector3f Yd;
-    Yd[0] = (54.0f + eta[0]) * std::tanh(s[0] / 3.0f);
-    Yd[1] = (50.0f + eta[1]) * std::tanh(s[1]);
-    Yd[2] = (100.0f + eta[2]) * (s[2] > 0 ? 1.0f : -1.0f);  // sign函数
-
-    Vector3f V = qd_desired + K.cwiseProduct(error_dot) + Yd;
-
-    // 这里应该计算力矩，但暂时返回V作为占位符
-    return V;
+ Matrix3d RobotModel::skew(const  Vector3d& w) const {
+     Matrix3d wx;
+    wx << 0, -w(2), w(1),
+          w(2), 0, -w(0),
+          -w(1), w(0), 0;
+    return wx;
 }
 
-Vector3f RobotModel::clampTorque(const Vector3f& torque, const std::vector<float>& limits) const
-{
-    Vector3f clamped = torque;
+// 辅助函数：计算螺旋轴的指数映射
+ Matrix4d RobotModel::expm_screw(const  VectorXd& S, double theta) const {
+    // 分离角速度和线速度部分
+     Vector3d w = S.segment(0, 3);
+     Vector3d v = S.segment(3, 3);
 
-    if (limits.size() >= 6) {
-        // 关节1限制
-        if (clamped[0] > limits[1]) clamped[0] = limits[1];
-        if (clamped[0] < limits[0]) clamped[0] = limits[0];
+     Matrix4d T;
+    T.setIdentity(); // 初始化为单位矩阵
 
-        // 关节2限制 (根据C#代码: -1.5 ~ 2.0)
-        if (clamped[1] > limits[3]) clamped[1] = limits[3];
-        if (clamped[1] < limits[2]) clamped[1] = limits[2];
+    double w_norm = w.norm();
 
-        // 关节3限制
-        if (clamped[2] > limits[5]) clamped[2] = limits[5];
-        if (clamped[2] < limits[4]) clamped[2] = limits[4];
+    if (w_norm < 1e-10) {
+        // 特殊情况：纯平移 (w接近零向量)
+        T.topRightCorner(3, 1) = v * theta;
+    } else {
+        // 一般情况：旋转和平移
+         Matrix3d wx = skew(w);
+         Matrix3d I =  Matrix3d::Identity();
+        
+        // 计算旋转矩阵 R
+         Matrix3d R = I + std::sin(theta) * wx + (1 - std::cos(theta)) * wx * wx;
+        
+        // 计算平移向量 p
+         Matrix3d term_in_parentheses = I * theta + (1 - std::cos(theta)) * wx + (theta - std::sin(theta)) * wx * wx;
+         Vector3d p = term_in_parentheses * v;
+
+        T.topLeftCorner(3, 3) = R;
+        T.topRightCorner(3, 1) = p;
     }
-
-    return clamped;
+    return T;
 }
 
-// ==================== 私有辅助函数 ====================
 
-// 这里实现各种辅助函数...
-// 由于时间关系，暂时留空，后续根据需要实现
+Matrix6d RobotModel::adjoint(const  Matrix4d& T) const
+{
+    Matrix6d AdT;
+    
+    // 提取旋转矩阵R和平移向量p
+     Matrix3d R = T.block<3, 3>(0, 0);
+     Vector3d p = T.block<3, 1>(0, 3);
+    
+    // 计算p的斜对称矩阵
+     Matrix3d p_hat = skew(p);
+    
+    // 构建伴随变换矩阵
+    // 左上角: R
+    AdT.block<3, 3>(0, 0) = R;
+    // 右上角: 0
+    AdT.block<3, 3>(0, 3) =  Matrix3d::Zero();
+    // 左下角: p_hat * R
+    AdT.block<3, 3>(3, 0) = p_hat * R;
+    // 右下角: R
+    AdT.block<3, 3>(3, 3) = R;
+    
+    return AdT;
+}
+
+
+Eigen::Matrix<double, 6, 6> RobotModel::ad(const Eigen::VectorXd& A) const
+{
+    // 检查输入维度
+    if (A.size() != 6) {
+        throw std::invalid_argument("ad: 输入向量必须是6维");
+    }
+    
+    // 提取角速度和线速度部分
+    Eigen::Vector3d w = A.segment(0, 3);
+    Eigen::Vector3d v = A.segment(3, 3);
+    
+    // 计算斜对称矩阵
+    Eigen::Matrix3d w_hat = skew(w);
+    Eigen::Matrix3d v_hat = skew(v);
+    
+    // 构建伴随矩阵
+    Eigen::Matrix<double, 6, 6> adA;
+    adA.block<3, 3>(0, 0) = w_hat;
+    adA.block<3, 3>(0, 3) = Eigen::Matrix3d::Zero();
+    adA.block<3, 3>(3, 0) = v_hat;
+    adA.block<3, 3>(3, 3) = w_hat;
+    
+    return adA;
+}

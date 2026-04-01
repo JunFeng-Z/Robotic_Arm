@@ -81,6 +81,9 @@ public:
      */
     void setDuration(float duration) { params_.duration = duration; }
 
+    // 预计算的螺旋线轨迹查询接口
+    TrajectoryPoint getPrecomputedPoint(int index) const;
+
     // ==================== 螺旋线轨迹参数设置 ====================
 
     void setSpiralAmplitude(float amplitude) { params_.spiralAmplitude = amplitude; }
@@ -103,6 +106,7 @@ public:
 
 private:
     TrajectoryParams params_;
+    std::vector<TrajectoryPoint> precomputedSpiralTrajectory_;  // 预计算的螺旋线轨迹点序列
 };
 
 #endif // TRAJECTORY_GENERATOR_H

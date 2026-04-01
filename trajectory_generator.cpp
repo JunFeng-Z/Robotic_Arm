@@ -4,11 +4,22 @@
 TrajectoryGenerator::TrajectoryGenerator(const TrajectoryParams& params)
     : params_(params)
 {
+    precomputedSpiralTrajectory_ = generateTrajectory(0.001f);  // 预计算螺旋线轨迹，时间步长1ms
 }
 
 void TrajectoryGenerator::setParameters(const TrajectoryParams& params)
 {
-    params_ = params;
+    // 判断是否需要重新预计算
+    bool needRecompute = (params.duration    != params_.duration)    ||
+                         (params.type        != params_.type)        ||
+                         (params.spiralRate  != params_.spiralRate)  ||
+                         (params.spiralAmplitude != params_.spiralAmplitude);
+
+    params_ = params;  // 只赋值一次
+
+    if (needRecompute) {
+        precomputedSpiralTrajectory_ = generateTrajectory(0.001f);
+    }
 }
 
 void TrajectoryGenerator::setTrajectoryType(TrajectoryType type)
@@ -88,4 +99,18 @@ std::vector<TrajectoryPoint> TrajectoryGenerator::generateTrajectory(float dt) c
 bool TrajectoryGenerator::isTrajectoryFinished(float t) const
 {
     return t >= params_.duration;
+}
+
+
+//ControlWorker 根据index查询预先计算的precomputedSpiralTrajectory_轨迹点
+TrajectoryPoint TrajectoryGenerator::getPrecomputedPoint(int index) const
+{
+    if (precomputedSpiralTrajectory_.empty()) {
+        return TrajectoryPoint();
+    }
+    // 防止越界
+    index = std::clamp(index, 0, 
+            static_cast<int>(precomputedSpiralTrajectory_.size()) - 1);
+    
+    return precomputedSpiralTrajectory_[index];
 }

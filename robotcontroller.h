@@ -64,7 +64,7 @@ private:
     std::atomic_bool running_{false};
     std::atomic_bool trajectoryInitialized_{false};
     float startTime_ = 0.0f;
-    int controlPeriodMs_ = 10;
+    int controlPeriodMs_ = 1;
 
     std::atomic_int moveIndex_{0};  // 预定义轨迹点的起始索引
 };

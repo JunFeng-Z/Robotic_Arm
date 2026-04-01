@@ -13,6 +13,9 @@ using Vector3f = Eigen::Vector3f;
 using Vector3d = Eigen::Vector3d;
 using Matrix3f = Eigen::Matrix3f;
 using Matrix3d = Eigen::Matrix3d;
+using Matrix4d = Eigen::Matrix4d;
+using Matrix6d = Eigen::Matrix<double, 6, 6>;
+using VectorXd = Eigen::VectorXd;
 
 /**
  * @brief 关节状态数据结构
@@ -72,7 +75,7 @@ struct RobotParams
 
         // 设置默认DH参数 (根据C#代码中的a2=0.12, a3=0.12)
         // 假设为平面3关节机器人
-        dh[0] = DHParameters(0, 0, 0, 0);      // 关节1: 绕Z轴旋转
+        dh[0] = DHParameters(M_PI/2.0, 0, 0, 0);      // 关节1: 绕Z轴旋转
         dh[1] = DHParameters(0, 0.12f, 0, 0);  // 关节2: 连杆长度0.12m
         dh[2] = DHParameters(0, 0.12f, 0, 0);  // 关节3: 连杆长度0.12m
 
@@ -161,7 +164,7 @@ struct ControlParams
     float k3 = 1.0f;  // 前馈增益
 
     // 控制周期（毫秒）
-    int controlPeriod = 10;  // 默认10ms = 100Hz
+    int controlPeriod = 1;  // 默认1ms = 1000Hz
 
     // 轨迹参数
     TrajectoryParams trajectory;

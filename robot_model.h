@@ -117,93 +117,53 @@ public:
      */
     Vector3f computeGravityCompensation(const Vector3f& q) const;
 
-    // ==================== 控制算法 ====================
+        // 逆速度计算（直接传入雅可比矩阵）
+    bool inverseVelocity(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) const;
+    
+    // 使用QR分解的逆速度计算
+    bool inverseVelocityQR(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) const;
+    
+    // 使用阻尼最小二乘法的逆速度计算
+    bool inverseVelocityDamped(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd, float lambda = 0.01f) const;
+    
+    Vector3f forwardVelocity(const Vector3f& q, const Vector3f& qd) const;
 
-    /**
-     * @brief PD控制器
-     * @param q_desired 期望关节角度
-     * @param qd_desired 期望关节速度
-     * @param q_current 当前关节角度
-     * @param qd_current 当前关节速度
-     * @param Kp 位置增益矩阵 (3x3)
-     * @param Kd 速度增益矩阵 (3x3)
-     * @return 控制力矩
-     */
-    Vector3f computePDControl(const Vector3f& q_desired,
-                             const Vector3f& qd_desired,
-                             const Vector3f& q_current,
-                             const Vector3f& qd_current,
-                             const Matrix3f& Kp,
-                             const Matrix3f& Kd) const;
+        // 逆加速度计算
+    bool inverseAcceleration(const Vector3f& q, const Vector3f& qd, 
+                            const Vector3f& end_acc, Vector3f& qdd) const;
+    
+    bool inverseAccelerationQR(const Vector3f& q, const Vector3f& qd, 
+                              const Vector3f& end_acc, Vector3f& qdd) const;
 
-    /**
-     * @brief 计算力矩控制 (计算力矩法)
-     * @param q_desired 期望关节角度
-     * @param qd_desired 期望关节速度
-     * @param qdd_desired 期望关节加速度
-     * @param q_current 当前关节角度
-     * @param qd_current 当前关节速度
-     * @param Kp 位置增益矩阵
-     * @param Kd 速度增益矩阵
-     * @return 控制力矩
-     */
-    Vector3f computeTorqueControl(const Vector3f& q_desired,
-                                 const Vector3f& qd_desired,
-                                 const Vector3f& qdd_desired,
-                                 const Vector3f& q_current,
-                                 const Vector3f& qd_current,
-                                 const Matrix3f& Kp,
-                                 const Matrix3f& Kd) const;
 
-    /**
-     * @brief 滑模控制器 (从C#代码移植)
-     * @param q_desired 期望关节角度
-     * @param qd_desired 期望关节速度
-     * @param q_current 当前关节角度
-     * @param qd_current 当前关节速度
-     * @param K 滑模面增益
-     * @param eta 切换增益
-     * @return 控制力矩
-     */
-    Vector3f computeSlidingModeControl(const Vector3f& q_desired,
-                                      const Vector3f& qd_desired,
-                                      const Vector3f& q_current,
-                                      const Vector3f& qd_current,
-                                      const Vector3f& K,
-                                      const Vector3f& eta) const;
-
-    /**
-     * @brief 力矩限幅
-     * @param torque 输入力矩
-     * @param limits 力矩限制 [min1, max1, min2, max2, min3, max3]
-     * @return 限幅后的力矩
-     */
-    Vector3f clampTorque(const Vector3f& torque, const std::vector<float>& limits) const;
 
 private:
     RobotParams params_;  // 机器人参数
 
-    // 辅助函数
-    Matrix3f computeTransformMatrix(int i, const Vector3f& q) const;
-    Vector3f computeLinkVelocity(int i, const Vector3f& q, const Vector3f& qd) const;
-    Vector3f computeLinkAcceleration(int i, const Vector3f& q, const Vector3f& qd, const Vector3f& qdd) const;
+    Matrix4d zero_config_pose_M_;  // 零位姿的齐次变换矩阵
+    // 计算零位姿的齐次变换矩阵
+    void calculateZeroConfigPoseM();
 
-    // C#代码中的辅助函数
-    float computeM1_Q1(float q2, float q3) const;
-    float computeM2_Q2(float q3) const;
-    float computeM2_Q3(float q3) const;
-    float computeM3_Q2(float q3) const;
-    float computeM3_Q3() const;
-    float computeC1_Q1Q2(float q2, float q3) const;
-    float computeC1_Q1Q3(float q2, float q3) const;
-    float computeC2_Q1Q1(float q2, float q3) const;
-    float computeC2_Q2Q2(float q3) const;
-    float computeC2_Q2Q3(float q3) const;
-    float computeC2_Q3Q3(float q3) const;
-    float computeC3_Q1Q1(float q2, float q3) const;
-    float computeC3_Q2Q2(float q3) const;
-    float computeG2(float q2, float tau3) const;
-    float computeG3(float q2, float q3) const;
+    Matrix4d dh_transform(double a, double alpha, double d, double theta);
+
+    Eigen::Matrix3d skew(const Eigen::Vector3d& w) const;
+    Eigen::Matrix4d expm_screw(const Eigen::VectorXd& S, double theta) const;
+    Matrix6d adjoint(const Eigen::Matrix4d& T) const;
+    Eigen::Matrix<double, 6, 6> ad(const Eigen::VectorXd& A) const;//李括号运算
+
+    void CalculateSList();
+
+
+    Eigen::VectorXd S1 = Eigen::VectorXd(6);
+    Eigen::VectorXd S2 = Eigen::VectorXd(6);
+    Eigen::VectorXd S3 = Eigen::VectorXd(6);
+
+
+    Eigen::Matrix4d zero_pose_M1_;  // 对应M1
+    Eigen::Matrix4d zero_pose_M2_;  // 对应M2
+    Eigen::Matrix4d zero_pose_M3_;  // 对应M3
+
+
 };
 
 #endif // ROBOT_MODEL_H

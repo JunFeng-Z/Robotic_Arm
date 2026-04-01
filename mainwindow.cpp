@@ -165,6 +165,18 @@ QGroupBox *MainWindow::buildTunePanel()
         tuneMinusBtns_.append(minusBtn);
         tuneStepBoxes_.append(combo);
 
+        // 连接加号按钮
+        connect(plusBtn, &QPushButton::clicked, this, [this, i]() {
+            float step = tuneStepBoxes_[i]->currentText().toFloat();
+            adjustParameter(i, step);
+        });
+
+        // 连接减号按钮
+        connect(minusBtn, &QPushButton::clicked, this, [this, i]() {
+            float step = tuneStepBoxes_[i]->currentText().toFloat();
+            adjustParameter(i, -step);
+        });
+
         layout->addWidget(label, i, 0);
         layout->addWidget(plusBtn, i, 1);
         layout->addWidget(minusBtn, i, 2);
@@ -184,6 +196,10 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 创建机器人控制器
     robotController_ = new RobotController(this);
+
+    // 初始化控制参数（使用默认值）
+    controlParams_ = ControlParams();
+    robotController_->setControlParams(controlParams_);
 
     auto *central = new QWidget;
     auto *root = new QHBoxLayout(central);
@@ -351,6 +367,12 @@ void MainWindow::onRefreshDevicesClicked()
 void MainWindow::onSetDurationClicked()
 {
     const int sec = secondsBox_ ? secondsBox_->value() : 0;
+    controlParams_.trajectory.duration = sec;
+
+    if (robotController_) {
+        robotController_->setControlParams(controlParams_);
+    }
+
     appendLog(QStringLiteral("总时长设置为 %1 秒").arg(sec));
 }
 
@@ -491,4 +513,46 @@ void MainWindow::onControlStatusChanged(bool running)
 {
     QString status = running ? QStringLiteral("运行中") : QStringLiteral("已停止");
     appendLog(QStringLiteral("控制状态: %1").arg(status));
+}
+
+void MainWindow::adjustParameter(int index, float delta)
+{
+    // 索引对应: 0:d1, 1:d2, 2:d3, 3:k1, 4:k2, 5:k3
+    QString paramName;
+    float oldValue = 0.0f;
+    float newValue = 0.0f;
+
+    if (index < 3) {
+        // d1, d2, d3: DH参数中的d值
+        paramName = QString("d%1").arg(index + 1);
+        oldValue = controlParams_.robotParams.dh[index].d;
+        controlParams_.robotParams.dh[index].d += delta;
+        newValue = controlParams_.robotParams.dh[index].d;
+    } else if (index == 3) {
+        paramName = "k1";
+        oldValue = controlParams_.k1;
+        controlParams_.k1 += delta;
+        newValue = controlParams_.k1;
+    } else if (index == 4) {
+        paramName = "k2";
+        oldValue = controlParams_.k2;
+        controlParams_.k2 += delta;
+        newValue = controlParams_.k2;
+    } else if (index == 5) {
+        paramName = "k3";
+        oldValue = controlParams_.k3;
+        controlParams_.k3 += delta;
+        newValue = controlParams_.k3;
+    }
+
+    // 更新控制器参数
+    if (robotController_) {
+        robotController_->setControlParams(controlParams_);
+    }
+
+    appendLog(QStringLiteral("参数%1: %2 → %3 (Δ%4)")
+                  .arg(paramName)
+                  .arg(oldValue, 0, 'f', 3)
+                  .arg(newValue, 0, 'f', 3)
+                  .arg(delta, 0, 'f', 3));
 }

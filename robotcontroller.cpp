@@ -12,8 +12,8 @@ ControlWorker::ControlWorker(QObject *parent)
     : QObject(parent)
 {
     // 创建默认的机器人模型和轨迹生成器
-    robotModel_ = std::make_unique<RobotModel>();
-    trajectoryGenerator_ = std::make_unique<TrajectoryGenerator>();
+    robotModel_ = std::make_unique<RobotModel>(params_.robotParams);
+    trajectoryGenerator_ = std::make_unique<TrajectoryGenerator>(params_.trajectory);
 }
 
 void ControlWorker::start()
@@ -93,37 +93,28 @@ void ControlWorker::controlLoop()
         {
             QMutexLocker locker(&paramsMutex_);
             if (elapsedTime > params_.trajectory.duration) {
+                //这里增加发送0力矩的函数，确保机器人停止
                 emit logMessage(QStringLiteral("轨迹跟踪已完成，时长: %1秒").arg(elapsedTime, 0, 'f', 2));
                 emit controlStatusChanged(false);
                 running_.store(false);
                 break;
             }
         }
-
-        // 计算期望轨迹
-        Eigen::Vector3f desiredTrajectory = computeDesiredTrajectory(elapsedTime);
-
-        // 获取关节状态
-        std::array<JointState, 4> currentStates;
+        // 获取预计算轨迹点（对应C#里的查表）
+        int index = static_cast<int>(elapsedTime / 0.001f);
+        TrajectoryPoint desiredPoint;
         {
-            QMutexLocker locker(&stateMutex_);
-            currentStates = jointStates_;
+            QMutexLocker locker(&modelMutex_);
+            if (!trajectoryGenerator_) continue;
+            desiredPoint = trajectoryGenerator_->getPrecomputedPoint(index);
         }
 
-        // 对每个关节执行控制
-        for (int jointIndex = 1; jointIndex <= 3; ++jointIndex) {
-            const JointState &state = currentStates[jointIndex];
+        
 
-            if (state.jointIndex == 0) {
-                continue;  // 关节未初始化
-            }
 
-            // 计算控制量
-            auto [targetPos, targetVel] = computeControl(jointIndex, state, desiredTrajectory);
 
-            // 发送控制命令信号
-            emit controlCommandSent(jointIndex, targetPos, targetVel);
-        }
+
+
 
         // 精确休眠到下一个控制周期
         std::this_thread::sleep_until(nextWakeTime);
