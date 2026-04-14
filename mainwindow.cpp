@@ -5,6 +5,8 @@
 #include "serialcanworkers.h"
 #include "robotcontroller.h"
 
+#define _USE_MATH_DEFINES
+#include <cmath>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QFrame>
@@ -16,6 +18,7 @@
 #include <QSpinBox>
 #include <QTextEdit>
 #include <QThread>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QSerialPortInfo>
 
@@ -116,11 +119,17 @@ QGroupBox *MainWindow::buildRunPanel()
     row1->addWidget(teachBtn_);
     layout->addLayout(row1);
 
-    clearDataBtn_ = new QPushButton(QStringLiteral("清除数据"));
+    clearDataBtn_ = new QPushButton(QStringLiteral("清除图表"));
+    pausePlotBtn_ = new QPushButton(QStringLiteral("暂停图表"));
+    resumePlotBtn_ = new QPushButton(QStringLiteral("重启图表"));
     setDurationBtn_ = new QPushButton(QStringLiteral("设置时长"));
     runAlgoBtn_ = new QPushButton(QStringLiteral("运行算法"));
 
     layout->addWidget(clearDataBtn_);
+    auto *plotControlRow = new QHBoxLayout;
+    plotControlRow->addWidget(pausePlotBtn_);
+    plotControlRow->addWidget(resumePlotBtn_);
+    layout->addLayout(plotControlRow);
     layout->addWidget(setDurationBtn_);
     layout->addWidget(runAlgoBtn_);
 
@@ -210,9 +219,38 @@ MainWindow::MainWindow(QWidget *parent)
     auto *plotGrid = new QGridLayout;
     plotGrid->setSpacing(10);
 
-    for (int i = 0; i < 4; ++i) {
-        plotGrid->addWidget(new PlotWidget, i / 2, i % 2);
-    }
+    // 创建4个绘图窗口，分别显示不同的数据
+    plotWidgets_[0] = new PlotWidget;
+    plotWidgets_[0]->setPlotType(PlotWidget::JointPosition);
+    plotWidgets_[0]->setPlotTitle("关节角度");
+    plotWidgets_[0]->setYAxisLabel("角度 (rad)");
+    plotWidgets_[0]->setTimeWindow(10.0f);  // 10秒时间窗口
+    plotWidgets_[0]->setDataChannels(PlotWidget::ChannelAll);
+    plotGrid->addWidget(plotWidgets_[0], 0, 0);
+
+    plotWidgets_[1] = new PlotWidget;
+    plotWidgets_[1]->setPlotType(PlotWidget::JointVelocity);
+    plotWidgets_[1]->setPlotTitle("关节速度");
+    plotWidgets_[1]->setYAxisLabel("速度 (rad/s)");
+    plotWidgets_[1]->setTimeWindow(10.0f);
+    plotWidgets_[1]->setDataChannels(PlotWidget::ChannelAll);
+    plotGrid->addWidget(plotWidgets_[1], 0, 1);
+
+    plotWidgets_[2] = new PlotWidget;
+    plotWidgets_[2]->setPlotType(PlotWidget::JointTorque);
+    plotWidgets_[2]->setPlotTitle("关节扭矩");
+    plotWidgets_[2]->setYAxisLabel("扭矩 (N·m)");
+    plotWidgets_[2]->setTimeWindow(10.0f);
+    plotWidgets_[2]->setDataChannels(PlotWidget::ChannelAll);
+    plotGrid->addWidget(plotWidgets_[2], 1, 0);
+
+    plotWidgets_[3] = new PlotWidget;
+    plotWidgets_[3]->setPlotType(PlotWidget::EndEffectorPos);
+    plotWidgets_[3]->setPlotTitle("末端位置");
+    plotWidgets_[3]->setYAxisLabel("位置 (m)");
+    plotWidgets_[3]->setTimeWindow(10.0f);
+    plotWidgets_[3]->setDataChannels(PlotWidget::ChannelAll);
+    plotGrid->addWidget(plotWidgets_[3], 1, 1);
 
     auto *imageFrame = new QFrame;
     imageFrame->setFrameShape(QFrame::StyledPanel);
@@ -266,12 +304,21 @@ MainWindow::MainWindow(QWidget *parent)
     connect(teachBtn_, &QPushButton::clicked, this, &MainWindow::onTeachClicked);
     connect(runAlgoBtn_, &QPushButton::clicked, this, &MainWindow::onRunAlgoClicked);
     connect(clearDataBtn_, &QPushButton::clicked, this, &MainWindow::onClearDataClicked);
+    connect(pausePlotBtn_, &QPushButton::clicked, this, &MainWindow::onPausePlotClicked);
+    connect(resumePlotBtn_, &QPushButton::clicked, this, &MainWindow::onResumePlotClicked);
 
     // 连接RobotController的信号
     connect(robotController_, &RobotController::jointStateChanged, this, &MainWindow::onJointStateUpdated);
     connect(robotController_, &RobotController::controlCommandSent, this, &MainWindow::onControlCommandSent);
+    connect(robotController_, &RobotController::torqueCommandSent, this, &MainWindow::onTorqueCommandSent);
     connect(robotController_, &RobotController::controlStatusChanged, this, &MainWindow::onControlStatusChanged);
     connect(robotController_, &RobotController::logMessage, this, &MainWindow::appendLog);
+
+    // 创建模拟数据定时器（用于测试绘图功能）
+    simulationTimer_ = new QTimer(this);
+    simulationTimer_->setInterval(50);  // 50ms更新间隔，约20Hz
+    connect(simulationTimer_, &QTimer::timeout, this, &MainWindow::onSimulationTimer);
+    simulationTimer_->start();
 
     this->onRefreshDevicesClicked();
 }
@@ -378,10 +425,81 @@ void MainWindow::onSetDurationClicked()
 
 void MainWindow::onJointStateUpdated(const JointState &state)
 {
+    // 更新日志
     appendLog(QStringLiteral("关节%1: Pos=%2 Vel=%3")
                   .arg(state.jointIndex)
                   .arg(state.position, 0, 'f', 3)
                   .arg(state.velocity, 0, 'f', 3));
+
+    // 更新绘图
+    if (plotWidgets_[0] && state.jointIndex >= 1 && state.jointIndex <= 3) {
+        // 关节角度绘图（索引0）
+        plotWidgets_[0]->updateData(state.jointIndex - 1, state.position);
+
+        // 关节速度绘图（索引1）
+        plotWidgets_[1]->updateData(state.jointIndex - 1, state.velocity);
+    }
+}
+
+void MainWindow::onTorqueCommandSent(int jointIndex, float torque)
+{
+    // 更新日志
+    appendLog(QStringLiteral("关节%1 扭矩: %2 N·m")
+                  .arg(jointIndex)
+                  .arg(torque, 0, 'f', 3));
+
+    // 更新扭矩绘图
+    if (plotWidgets_[2] && jointIndex >= 1 && jointIndex <= 3) {
+        plotWidgets_[2]->updateData(jointIndex - 1, torque);
+    }
+}
+
+void MainWindow::onSimulationTimer()
+{
+    // 生成模拟数据（正弦波）用于测试绘图
+    static float time = 0.0f;
+    const float dt = 0.05f;  // 50ms间隔
+    time += dt;
+
+    // 三个关节的模拟数据（不同频率和幅度的正弦波）
+    for (int joint = 1; joint <= 3; ++joint) {
+        // 关节位置：正弦波，不同频率和幅度
+        float position = 0.5f * sin(2.0f * M_PI * 0.2f * time + joint * 0.5f);
+
+        // 关节速度：位置的导数（余弦波）
+        float velocity = 0.5f * 2.0f * M_PI * 0.2f * cos(2.0f * M_PI * 0.2f * time + joint * 0.5f);
+
+        // 关节扭矩：另一个频率的正弦波
+        float torque = 0.3f * sin(2.0f * M_PI * 0.3f * time + joint * 1.0f);
+
+        // 更新绘图数据（直接调用绘图窗口，绕过RobotController）
+        if (plotWidgets_[0]) {
+            plotWidgets_[0]->updateData(joint - 1, position);
+        }
+
+        if (plotWidgets_[1]) {
+            plotWidgets_[1]->updateData(joint - 1, velocity);
+        }
+
+        if (plotWidgets_[2]) {
+            plotWidgets_[2]->updateData(joint - 1, torque);
+        }
+
+        // 更新末端位置绘图（索引3）- 使用一些模拟的XYZ数据
+        if (plotWidgets_[3]) {
+            // 模拟末端位置：螺旋线轨迹
+            float radius = 0.02f;
+            float x = radius * cos(2.0f * M_PI * 0.1f * time);
+            float y = radius * sin(2.0f * M_PI * 0.1f * time);
+            float z = 0.01f * time;
+
+            QVector<float> endEffectorPos = {x, y, z};
+            plotWidgets_[3]->updateData(endEffectorPos);
+        }
+    }
+
+    // 可选：更新日志显示当前模拟时间
+    // appendLog(QStringLiteral("模拟时间: %1秒").arg(time, 0, 'f', 1));
 }
 
 void MainWindow::startWorkers()
@@ -400,6 +518,7 @@ void MainWindow::startWorkers()
     serialRxWorker_->moveToThread(serialThread_);
     canParserWorker_->moveToThread(canParserThread_);
 
+    //设置两个worker线程启动的开关
     connect(serialThread_, &QThread::started, serialRxWorker_, &SerialRxWorker::start);
     connect(canParserThread_, &QThread::started, canParserWorker_, &CanParserWorker::start);
 
@@ -493,11 +612,36 @@ void MainWindow::onRunAlgoClicked()
 void MainWindow::onClearDataClicked()
 {
     //清除UI上所有的图表数据
+    for (int i = 0; i < 4; ++i) {
+        if (plotWidgets_[i]) {
+            plotWidgets_[i]->clearData();
+        }
+    }
     //将轨迹跟踪中的索引设置回初始状态0
     if(robotController_) {
         robotController_->clearMoveIndex();
-        appendLog(QStringLiteral("预定轨迹索引已重置，图表数据已清除"));
     }
+    appendLog(QStringLiteral("图表数据已清除"));
+}
+
+void MainWindow::onPausePlotClicked()
+{
+    for (int i = 0; i < 4; ++i) {
+        if (plotWidgets_[i]) {
+            plotWidgets_[i]->pause();
+        }
+    }
+    appendLog(QStringLiteral("图表已暂停"));
+}
+
+void MainWindow::onResumePlotClicked()
+{
+    for (int i = 0; i < 4; ++i) {
+        if (plotWidgets_[i]) {
+            plotWidgets_[i]->resume();
+        }
+    }
+    appendLog(QStringLiteral("图表已重启"));
 }
 
 void MainWindow::onControlCommandSent(int jointIndex, float targetPos, float targetVel)
@@ -530,19 +674,19 @@ void MainWindow::adjustParameter(int index, float delta)
         newValue = controlParams_.robotParams.dh[index].d;
     } else if (index == 3) {
         paramName = "k1";
-        oldValue = controlParams_.k1;
-        controlParams_.k1 += delta;
-        newValue = controlParams_.k1;
+        oldValue = controlParams_.sliding_k1;
+        controlParams_.sliding_k1 += delta;
+        newValue = controlParams_.sliding_k1;
     } else if (index == 4) {
         paramName = "k2";
-        oldValue = controlParams_.k2;
-        controlParams_.k2 += delta;
-        newValue = controlParams_.k2;
+        oldValue = controlParams_.sliding_k2;
+        controlParams_.sliding_k2 += delta;
+        newValue = controlParams_.sliding_k2;
     } else if (index == 5) {
         paramName = "k3";
-        oldValue = controlParams_.k3;
-        controlParams_.k3 += delta;
-        newValue = controlParams_.k3;
+        oldValue = controlParams_.sliding_k3;
+        controlParams_.sliding_k3 += delta;
+        newValue = controlParams_.sliding_k3;
     }
 
     // 更新控制器参数

@@ -18,10 +18,12 @@ class QPushButton;
 class QSpinBox;
 class QTextEdit;
 class QThread;
+class QTimer;
 class SerialPort;
 class SerialRxWorker;
 class CanParserWorker;
 class RobotController;
+class PlotWidget;
 
 class MainWindow : public QMainWindow
 {
@@ -45,8 +47,11 @@ private slots:
     void onTeachClicked();
     void onRunAlgoClicked();
     void onControlCommandSent(int jointIndex, float targetPos, float targetVel);
+    void onTorqueCommandSent(int jointIndex, float torque);
     void onControlStatusChanged(bool running);
     void onClearDataClicked();
+    void onPausePlotClicked();
+    void onResumePlotClicked();
 
 private:
     QGroupBox *buildConnectionPanel();
@@ -83,6 +88,8 @@ private:
     QPushButton *initTrackBtn_ = nullptr;
     QPushButton *teachBtn_ = nullptr;
     QPushButton *clearDataBtn_ = nullptr;
+    QPushButton *pausePlotBtn_ = nullptr;
+    QPushButton *resumePlotBtn_ = nullptr;
     QPushButton *setDurationBtn_ = nullptr;
     QPushButton *runAlgoBtn_ = nullptr;
     QSpinBox *secondsBox_ = nullptr;
@@ -99,7 +106,17 @@ private:
     SerialRxWorker *serialRxWorker_ = nullptr;
     CanParserWorker *canParserWorker_ = nullptr;
     RobotController *robotController_ = nullptr;
+
+    // 绘图窗口（4个象限）
+    PlotWidget *plotWidgets_[4] = {nullptr, nullptr, nullptr, nullptr};
+
     ControlParams controlParams_;
+
+private:
+    // 模拟数据生成
+    QTimer *simulationTimer_ = nullptr;
+    float simulationTime_ = 0.0f;
+    void onSimulationTimer();
 };
 
 #endif // MAINWINDOW_H

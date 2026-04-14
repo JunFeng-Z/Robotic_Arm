@@ -3,6 +3,7 @@
 
 #include <eigen3/Eigen/Dense>
 #include <vector>
+#include <iostream>
 
 /**
  * @brief 机器人通用数据类型定义
@@ -25,11 +26,12 @@ struct JointState
     int jointIndex;
     float position;      // 关节位置 (rad)
     float velocity;      // 关节速度 (rad/s)
+    float acceleration;  // 关节加速度 (rad/s²)
     float timestamp;     // 时间戳 (s)
 
-    JointState() : jointIndex(0), position(0), velocity(0), timestamp(0) {}
-    JointState(int idx, float pos, float vel, float t = 0)
-        : jointIndex(idx), position(pos), velocity(vel), timestamp(t) {}
+    JointState() : jointIndex(0), position(0), velocity(0), acceleration(0), timestamp(0) {}
+    JointState(int idx, float pos, float vel, float acc, float t = 0)
+        : jointIndex(idx), position(pos), velocity(vel), acceleration(acc), timestamp(t) {}
 };
 
 /**
@@ -71,7 +73,7 @@ struct RobotParams
     RobotParams()
     {
         // 默认重力
-        gravity = Vector3f(0, 0, -9.81f);
+        gravity = Vector3f(0, 0, 9.81f);
 
         // 设置默认DH参数 (根据C#代码中的a2=0.12, a3=0.12)
         // 假设为平面3关节机器人
@@ -81,13 +83,14 @@ struct RobotParams
 
         // 质量 (根据C#代码: m2=0.35, m3=0.01)
         m[0] = 0.0f;    // 关节1质量 (通常为0)
-        m[1] = 0.35f;   // 关节2质量
-        m[2] = 0.01f;   // 关节3质量
+        m[1] = 0.45f;   // 关节2质量
+        m[2] = 0.004f;   // 关节3质量
 
+        //这里改成0.06,牛顿递推结果才是正确的，改成0.12,拉格朗日方法的结果才是正确的
         // 质心位置 (假设在连杆中心)
         rc[0] = Vector3f(0, 0, 0);
-        rc[1] = Vector3f(0.06f, 0, 0);  // 在连杆中间
-        rc[2] = Vector3f(0.06f, 0, 0);
+        rc[1] = Vector3f(-0.00f, 0, 0);  // 在连杆中间
+        rc[2] = Vector3f(-0.00f, 0, 0);
 
         // 惯量矩阵 (根据C#代码中的值)
         // C#代码: Izz1=0.0015, Iyy2=0.00437, Izz2=0.00437, Iyy3=0.00108, Izz3=0.00107
@@ -101,7 +104,7 @@ struct RobotParams
 
         Ic[2] << 0, 0, 0,
                  0, 0.00108f, 0,
-                 0, 0, 0.00107f;
+                 0, 0, 0.00108f;
     }
 };
 
@@ -158,10 +161,32 @@ struct TrajectoryPoint
  */
 struct ControlParams
 {
-    // 控制器增益
-    float k1 = 0.5f;  // 位置增益
-    float k2 = 0.1f;  // 速度增益
-    float k3 = 1.0f;  // 前馈增益
+
+    ControlParams() : 
+        sliding_k1(10.0f), sliding_k2(10.0f), sliding_k3(10.0f),
+        sliding_a1(1.0f), sliding_a2(1.0f), sliding_b1(1.0f),
+        torque_limit1(0.15f), torque_limit2(0.2f), torque_limit3(0.11f),
+        controlPeriod(1)
+    {
+        // 向量成员可以直接在这里初始化
+        K << sliding_k1, sliding_k2, sliding_k3;
+        detlta << torque_limit1, torque_limit2, torque_limit3;
+        sliding_arg << sliding_a1, sliding_a2, sliding_b1;
+    }
+    
+    // 滑模控制增益
+    float sliding_k1;  // 滑模面增益 K[0]
+    float sliding_k2;  // 滑模面增益 K[1]
+    float sliding_k3;  // 滑模面增益 K[2]
+    float sliding_a1;  // 切换增益 A1
+    float sliding_a2;  // 切换增益 A2
+    float sliding_b1;  // 切换增益 B1
+    float torque_limit1;  // 扭矩限制1
+    float torque_limit2;  // 扭矩限制2
+    float torque_limit3;  // 扭矩限制3
+
+    Eigen::Vector3f K, detlta,sliding_arg;
+
 
     // 控制周期（毫秒）
     int controlPeriod = 1;  // 默认1ms = 1000Hz

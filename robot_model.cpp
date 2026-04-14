@@ -2,13 +2,155 @@
 #include <cmath>
 
 RobotModel::RobotModel(const RobotParams& params)
-    : params_(params)
+    : params_(params),
+      S_list_(3, Eigen::VectorXd(6)),
+      A_list_(3, Eigen::VectorXd(6)),
+      V_list_(4, Eigen::VectorXd::Zero(6)),
+      Vd_list_(4, Eigen::VectorXd::Zero(6)),
+      F_list_(4, Eigen::VectorXd::Zero(6)),
+      G_list_(3, Matrix6d::Zero()),
+      tau_(Eigen::Vector3f::Zero()),
+      S1(S_list_[0]),S2(S_list_[1]),S3(S_list_[2]),
+      A1(A_list_[0]),A2(A_list_[1]),A3(A_list_[2]),
+      V0(V_list_[0]),V1(V_list_[1]),V2(V_list_[2]),V3(V_list_[3]),
+      Vd0(Vd_list_[0]),Vd1(Vd_list_[1]),Vd2(Vd_list_[2]),Vd3(Vd_list_[3]),
+      F1(F_list_[0]),F2(F_list_[1]),F3(F_list_[2]),F4(F_list_[3]),
+      T0_1_(Eigen::Matrix4d::Identity()),T1_2_(Eigen::Matrix4d::Identity()),T2_3_(Eigen::Matrix4d::Identity()),T3_4_(Eigen::Matrix4d::Identity()),
+      Ad_T0_1_inv_(Matrix6d::Zero()),Ad_T1_2_inv_(Matrix6d::Zero()),Ad_T2_3_inv_(Matrix6d::Zero()),Ad_T3_4_inv_(Matrix6d::Zero()),
+      M1_(Eigen::Matrix4d::Identity()),M2_(Eigen::Matrix4d::Identity()),M3_(Eigen::Matrix4d::Identity()),
+      M1_inv_(Eigen::Matrix4d::Identity()),M2_inv_(Eigen::Matrix4d::Identity()),M3_inv_(Eigen::Matrix4d::Identity()),
+      Ad_M1_inv_(Matrix6d::Zero()),Ad_M2_inv_(Matrix6d::Zero()),Ad_M3_inv_(Matrix6d::Zero()) 
 {
+    Initialize();
+}
+void RobotModel::Initialize() {
+    // 确保所有向量正确初始化
+    for (auto& v : S_list_) {
+        v = Eigen::VectorXd(6);
+    }
+    
+    for (auto& a : A_list_) {
+        a = Eigen::VectorXd(6);
+    }
+    
+    for (auto& v : V_list_) {
+        v = Eigen::VectorXd::Zero(6);
+    }
+    for (auto& vd : Vd_list_) 
+    {
+        vd = Eigen::VectorXd::Zero(6);
+    }
+    
+    // 计算初始的S_list_
+    CalculateSList();
+    calculateZeroConfigPoseM();
+    computeSpatialInertias();
+    Vd0.setZero();
+    Vd0(5) = 9.81;
 }
 
+void RobotModel::computeTransforms(const Vector3f& q) {
+    // 使用DH参数计算变换矩阵
+    // 注意：DH参数中的theta是关节角度，需要加上当前关节角度q
+    double q1 = q(0);
+    double q2 = q(1);
+    double q3 = q(2);
+    // T0_1: 从基座到关节1
+    T0_1_ = dh_transform(
+        params_.dh[0].a,
+        params_.dh[0].alpha,
+        params_.dh[0].d,
+        params_.dh[0].theta + q1
+    );
+    
+    // T1_2: 从关节1到关节2
+    T1_2_ = dh_transform(
+        params_.dh[1].a,
+        params_.dh[1].alpha,
+        params_.dh[1].d,
+        params_.dh[1].theta + q2
+    );
+    
+    // T2_3: 从关节2到关节3
+    T2_3_ = dh_transform(
+        params_.dh[2].a,
+        params_.dh[2].alpha,
+        params_.dh[2].d,
+        params_.dh[2].theta + q3
+    );
+    
+    // T3_4: 从关节3到末端执行器（单位矩阵）
+    T3_4_.setIdentity();
+    
+    // 更新伴随变换缓存
+    updateAdjointTransforms();
+    computeZeroTransforms();
+
+}
+
+void RobotModel::updateAdjointTransforms() {
+    // 计算逆变换的伴随矩阵并缓存
+    
+    // T0_1的逆伴随
+    Eigen::Matrix4d T0_1_inv = T0_1_.inverse();
+    Ad_T0_1_inv_ = adjoint(T0_1_inv);
+    
+    // T1_2的逆伴随
+    Eigen::Matrix4d T1_2_inv = T1_2_.inverse();
+    Ad_T1_2_inv_ = adjoint(T1_2_inv);
+    
+    // T2_3的逆伴随
+    Eigen::Matrix4d T2_3_inv = T2_3_.inverse();
+    Ad_T2_3_inv_ = adjoint(T2_3_inv);
+    
+    // T3_4的逆伴随（单位矩阵的逆还是单位矩阵）
+    // 实际上不需要计算，但为了完整性保留
+    Ad_T3_4_inv_ = adjoint(T3_4_.inverse());  // 或者直接设置为单位矩阵
+}
+
+
+void RobotModel::computeZeroTransforms() 
+{
+    // 方法1：使用DH函数计算（推荐）
+    // 注意：关节在零位时，关节角度q=0，所以使用DH参数中的theta
+    
+    // 关节1在零位的变换
+    M1_ = dh_transform(params_.dh[0].a, params_.dh[0].alpha, 
+                       params_.dh[0].d, params_.dh[0].theta);
+    
+    // 关节2在零位的变换
+    Eigen::Matrix4d T1_2_zero = dh_transform(params_.dh[1].a, params_.dh[1].alpha, 
+                                            params_.dh[1].d, params_.dh[1].theta);
+    
+    // 关节3在零位的变换
+    Eigen::Matrix4d T2_3_zero = dh_transform(params_.dh[2].a, params_.dh[2].alpha, 
+                                            params_.dh[2].d, params_.dh[2].theta);
+    
+    // 累积变换
+    M2_ = M1_ * T1_2_zero;
+    M3_ = M2_ * T2_3_zero;
+
+
+        // 在 computeTransforms 之后
+    // std::cout << "M2 X-axis: " << M2_.block<3,1>(0,0).transpose() << std::endl;
+    // std::cout << "M2 origin: " << M2_.block<3,1>(0,3).transpose() << std::endl;
+    
+
+    
+    // 计算逆变换和伴随变换缓存
+    M1_inv_ = M1_.inverse();
+    M2_inv_ = M2_.inverse();
+    M3_inv_ = M3_.inverse();
+    
+    Ad_M1_inv_ = adjoint(M1_inv_);
+    Ad_M2_inv_ = adjoint(M2_inv_);
+    Ad_M3_inv_ = adjoint(M3_inv_);
+}
 void RobotModel::setParameters(const RobotParams& params)
 {
     params_ = params;
+    CalculateSList();
+    calculateZeroConfigPoseM();
 }
 
 void RobotModel::CalculateSList()
@@ -43,7 +185,7 @@ void RobotModel::CalculateSList()
 }
 // ==================== 运动学计算 ====================
 
-bool RobotModel::forwardKinematics(const Vector3f& q, Vector3f& position) const
+bool RobotModel::forwardKinematics(const Vector3f& q, Vector3f& position)
 {
    // 将输入的关节角转换为double
     VectorXd q_d = q.cast<double>();
@@ -65,7 +207,7 @@ bool RobotModel::forwardKinematics(const Vector3f& q, Vector3f& position) const
     return true;
 }
 
-bool RobotModel::inverseKinematics(const Vector3f& position, Vector3f& q, int elbow) const
+bool RobotModel::inverseKinematics(const Vector3f& position, Vector3f& q, int elbow)
 {
     const float a2 = params_.dh[1].a;  // 0.12
     const float a3 = params_.dh[2].a;  // 0.12
@@ -129,7 +271,7 @@ bool RobotModel::inverseKinematics(const Vector3f& position, Vector3f& q, int el
     }
 }
 
-Matrix3f RobotModel::computeJacobian(const Vector3f& q) const
+Matrix3f RobotModel::computeJacobian(const Vector3f& q)
 {
     // 将输入关节角转换为double
      Vector3d q_d = q.cast<double>();
@@ -178,7 +320,7 @@ Matrix3f RobotModel::computeJacobian(const Vector3f& q) const
 
 //=========================实现逆速度计算========================
 //自行实现的基于史密斯正交化的QR分解方法，适用于3x3雅可比矩阵
-bool RobotModel::inverseVelocity(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) const
+bool RobotModel::inverseVelocity(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) 
 {
     // 检查雅可比矩阵是否有效
     if (J.hasNaN() || J.maxCoeff() > 1e6f || J.minCoeff() < -1e6f) {
@@ -244,7 +386,7 @@ bool RobotModel::inverseVelocity(const Matrix3f& J, const Vector3f& end_vel, Vec
     return true;
 }
 // 使用Eigen内置的QR分解方法，适用于3x3雅可比矩阵
-bool RobotModel::inverseVelocityQR(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) const
+bool RobotModel::inverseVelocityQR(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd) 
 {
     // 检查雅可比矩阵是否有效
     if (J.hasNaN() || J.maxCoeff() > 1e6f || J.minCoeff() < -1e6f) {
@@ -266,7 +408,7 @@ bool RobotModel::inverseVelocityQR(const Matrix3f& J, const Vector3f& end_vel, V
     return true;
 }
 // 使用阻尼最小二乘法的逆速度计算，适用于接近奇异的雅可比矩阵
-bool RobotModel::inverseVelocityDamped(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd, float lambda) const
+bool RobotModel::inverseVelocityDamped(const Matrix3f& J, const Vector3f& end_vel, Vector3f& qd, float lambda) 
 {
     // 检查雅可比矩阵是否有效
     if (J.hasNaN() || J.maxCoeff() > 1e6f || J.minCoeff() < -1e6f) {
@@ -290,106 +432,40 @@ bool RobotModel::inverseVelocityDamped(const Matrix3f& J, const Vector3f& end_ve
 }
 
 //正向计算连杆末端速度，输入关节角和关节速度，输出末端线速度
-Vector3f RobotModel::forwardVelocity(const Vector3f& q, const Vector3f& qd) const
+Vector3f RobotModel::forwardVelocity(const Vector3f& q, const Vector3f& qd) 
 {
-    // 将关节角转换为double
-    Eigen::Vector3d q_d = q.cast<double>();
-    Eigen::Vector3d qd_d = qd.cast<double>();
-    
-    double q1 = q_d[0], q2 = q_d[1], q3 = q_d[2];
-    double qd1 = qd_d[0], qd2 = qd_d[1], qd3 = qd_d[2];
-    
-    const double l2 = params_.dh[1].a;
-    const double l3 = params_.dh[2].a;
-    
-    // 1. 根据DH参数构建变换矩阵
-    Eigen::Matrix4d T0_1, T1_2, T2_3;
-    
-    // T0_1
-    double c1 = cos(q1), s1 = sin(q1);
-    T0_1 << c1,  0,  s1,  0,
-            s1,  0, -c1,  0,
-            0,   1,  0,   0,
-            0,   0,  0,   1;
-    
-    // T1_2
-    double c2 = cos(q2), s2 = sin(q2);
-    T1_2 << c2, -s2,  0,  l2 * c2,
-            s2,  c2,  0,  l2 * s2,
-            0,   0,   1,  0,
-            0,   0,   0,  1;
-    
-    // T2_3
-    double c3 = cos(q3), s3 = sin(q3);
-    T2_3 << c3, -s3,  0,  l3 * c3,
-            s3,  c3,  0,  l3 * s3,
-            0,   0,   1,  0,
-            0,   0,   0,  1;
-    
-    // 2. 计算逆变换矩阵
-    Eigen::Matrix4d T0_1_inv = T0_1.inverse();
-    Eigen::Matrix4d T1_2_inv = T1_2.inverse();
-    Eigen::Matrix4d T2_3_inv = T2_3.inverse();
-    
-    // 3. 计算伴随变换 adjoint(inv_transform(T))
-    Eigen::Matrix<double, 6, 6> Ad_T0_1_inv = adjoint(T0_1_inv);
-    Eigen::Matrix<double, 6, 6> Ad_T1_2_inv = adjoint(T1_2_inv);
-    Eigen::Matrix<double, 6, 6> Ad_T2_3_inv = adjoint(T2_3_inv);
-    
-    // 4. 计算零位变换矩阵（根据你提供的MATLAB代码）
-    Eigen::Matrix4d M1, M2, M3;
-    
-    // M1 = T0_1_zero
-    M1 << 1, 0, 0, 0,
-          0, 0, -1, 0,
-          0, 1, 0, 0,
-          0, 0, 0, 1;
-    
-    // M2 = T0_1_zero * T1_2_zero
-    Eigen::Matrix4d T1_2_zero;
-    T1_2_zero << 1, 0, 0, l2,
-                 0, 1, 0, 0,
-                 0, 0, 1, 0,
-                 0, 0, 0, 1;
-    M2 = M1 * T1_2_zero;
-    
-    // M3 = T0_1_zero * T1_2_zero * T2_3_zero
-    Eigen::Matrix4d T2_3_zero;
-    T2_3_zero << 1, 0, 0, l3,
-                 0, 1, 0, 0,
-                 0, 0, 1, 0,
-                 0, 0, 0, 1;
-    M3 = M2 * T2_3_zero;
-    
+    this->computeTransforms(q); // 计算当前关节角对应的变换矩阵
     // 5. 计算空间旋量 A_i = adjoint(inv(M_i)) * S_i
-    Eigen::Matrix<double, 6, 6> Ad_M1_inv = adjoint(M1.inverse());
-    Eigen::Matrix<double, 6, 6> Ad_M2_inv = adjoint(M2.inverse());
-    Eigen::Matrix<double, 6, 6> Ad_M3_inv = adjoint(M3.inverse());
-    
-    Eigen::VectorXd A1 = Ad_M1_inv * S1;
-    Eigen::VectorXd A2 = Ad_M2_inv * S2;
-    Eigen::VectorXd A3 = Ad_M3_inv * S3;
+    A1 = Ad_M1_inv_ * S1;
+    A2 = Ad_M2_inv_ * S2;
+    A3 = Ad_M3_inv_ * S3;
     
     // 6. 速度递推
-    Eigen::VectorXd V0 = Eigen::VectorXd::Zero(6);  // 基座速度为零
+    V0 = Eigen::VectorXd::Zero(6);  // 基座速度为零
     
     // V1 = A1 * qd1 + adjoint(inv(T0_1)) * V0
-    Eigen::VectorXd V1 = A1 * qd1 + Ad_T0_1_inv * V0;
+    V1 = A1 * qd(0) + Ad_T0_1_inv_ * V0;
     
     // V2 = A2 * qd2 + adjoint(inv(T1_2)) * V1
-    Eigen::VectorXd V2 = A2 * qd2 + Ad_T1_2_inv * V1;
+    V2 = A2 * qd(1) + Ad_T1_2_inv_ * V1;
     
     // V3 = A3 * qd3 + adjoint(inv(T2_3)) * V2
-    Eigen::VectorXd V3 = A3 * qd3 + Ad_T2_3_inv * V2;
+    V3 = A3 * qd(2) + Ad_T2_3_inv_ * V2;
     
     // 7. 提取末端线速度（旋量的后3个元素）
     Eigen::Vector3d end_vel = V3.segment(3, 3);
+    if(flag_){
+        std::cout<<"V0: "<<V0.transpose()<<std::endl;
+        std::cout<<"V1: "<<V1.transpose()<<std::endl;
+        std::cout<<"V2: "<<V2.transpose()<<std::endl;
+        std::cout<<"V3: "<<V3.transpose()<<std::endl;
+    }
     
     return end_vel.cast<float>();
 }
 
 
-Matrix3f RobotModel::computeJacobianDerivative(const Vector3f& q, const Vector3f& qd) const
+Matrix3f RobotModel::computeJacobianDerivative(const Vector3f& q, const Vector3f& qd) 
 {
 // 转换为double精度
     Eigen::Vector3d q_d = q.cast<double>();
@@ -455,7 +531,7 @@ Matrix3f RobotModel::computeJacobianDerivative(const Vector3f& q, const Vector3f
 
 
 bool RobotModel::inverseAcceleration(const Vector3f& q, const Vector3f& qd, 
-                                     const Vector3f& end_acc, Vector3f& qdd) const
+                                     const Vector3f& end_acc, Vector3f& qdd) 
 {
     // 1. 计算当前关节角下的雅可比矩阵
     Matrix3f J = computeJacobian(q);
@@ -526,7 +602,7 @@ bool RobotModel::inverseAcceleration(const Vector3f& q, const Vector3f& qd,
 }
 
 bool RobotModel::inverseAccelerationQR(const Vector3f& q, const Vector3f& qd, 
-                                       const Vector3f& end_acc, Vector3f& qdd) const
+                                       const Vector3f& end_acc, Vector3f& qdd) 
 {
     // 1. 计算雅可比和雅可比导数
     Matrix3f J = computeJacobian(q);
@@ -551,55 +627,42 @@ bool RobotModel::inverseAccelerationQR(const Vector3f& q, const Vector3f& qd,
 
 
 
+void RobotModel::computeSpatialAccelerations(const Vector3f& q, const Vector3f& qd, const Vector3f& qdd) {
+    // 检查是否已经计算了速度和变换矩阵
+    if (V1.size() == 0 || A1.size() == 0) {
+        throw std::runtime_error("Must call forwardKinematics and computeSpatialVelocities first!");
+    }
+    // 1. 计算基座加速度 Vd0（已在Initialize中设置）
 
+    
+    // 2. 计算关节1的加速度
+    // Vd1 = adjoint(inv_transform(T0_1)) * Vd0 + ad(V1) * A1 * qd1 + A1 * qdd1
+
+    Matrix6d ad_V1 = ad(V1);
+    Vd1 = Ad_T0_1_inv_ * Vd0 + ad_V1 * A1 * qd(0) + A1 * qdd(0);
+    
+    // 3. 计算关节2的加速度
+    // Vd2 = adjoint(inv_transform(T1_2)) * Vd1 + ad(V2) * A2 * qd2 + A2 * qdd2
+    Matrix6d ad_V2 = ad(V2);
+    Vd2 = Ad_T1_2_inv_ * Vd1 + ad_V2 * A2 * qd(1) + A2 * qdd(1);
+    
+    // 4. 计算关节3的加速度
+    // Vd3 = adjoint(inv_transform(T2_3)) * Vd2 + ad(V3) * A3 * qd3 + A3 * qdd3
+
+    Matrix6d ad_V3 = ad(V3);
+    Vd3 = Ad_T2_3_inv_ * Vd2 + ad_V3 * A3 * qd(2) + A3 * qdd(2);
+    if(flag_){
+        std::cout<<"Vd0: " << Vd0.transpose() << std::endl;
+        std::cout<<"Vd1: " << Vd1.transpose() << std::endl;
+        std::cout<<"Vd2: " << Vd2.transpose() << std::endl;
+        std::cout<<"Vd3: " << Vd3.transpose() << std::endl;
+    }
+}
 
 
 // ==================== 动力学计算 ====================
 
-Matrix3f RobotModel::computeMassMatrix(const Vector3f& q) const
-{
-    // TODO: 实现质量矩阵计算
-    Matrix3f M;
-    M.setIdentity();
-    return M;
-}
-
-Matrix3f RobotModel::computeCoriolisMatrix(const Vector3f& q, const Vector3f& qd) const
-{
-    // TODO: 实现科里奥利矩阵计算
-    Matrix3f C;
-    C.setZero();
-    return C;
-}
-
-Vector3f RobotModel::computeGravityVector(const Vector3f& q) const
-{
-    // TODO: 实现重力向量计算
-    return computeGravityCompensation(q);
-}
-
-Vector3f RobotModel::computeInverseDynamics(const Vector3f& q, const Vector3f& qd, const Vector3f& qdd) const
-{
-    // 使用质量矩阵-科里奥利-重力模型
-    Matrix3f M = computeMassMatrix(q);
-    Matrix3f C = computeCoriolisMatrix(q, qd);
-    Vector3f G = computeGravityVector(q);
-
-    return M * qdd + C * qd + G;
-}
-
-Vector3f RobotModel::computeForwardDynamics(const Vector3f& q, const Vector3f& qd, const Vector3f& tau) const
-{
-    // τ = M(q)qdd + C(q,qd)qd + G(q)
-    // => qdd = M(q)^{-1}(τ - C(q,qd)qd - G(q))
-    Matrix3f M = computeMassMatrix(q);
-    Matrix3f C = computeCoriolisMatrix(q, qd);
-    Vector3f G = computeGravityVector(q);
-
-    return M.inverse() * (tau - C * qd - G);
-}
-
-Vector3f RobotModel::computeTorqueDecoupled(const std::vector<float>& jointstate) const
+Vector3f RobotModel::computeTorqueDecoupled(const std::vector<float>& jointstate) 
 {
     // 从C#代码移植的Closed_Arm_Modle_decoup函数
     if (jointstate.size() < 9) {
@@ -662,7 +725,454 @@ Vector3f RobotModel::computeTorqueDecoupled(const std::vector<float>& jointstate
     return Vector3f(tao1, tao2, tao3);
 }
 
-Vector3f RobotModel::computeGravityCompensation(const Vector3f& q) const
+void RobotModel::computeSpatialInertias() {
+    for (int i = 0; i < 3; i++) {
+        G_list_[i] = computeSpatialInertia(i);
+    }
+}
+// Matrix6d RobotModel::computeSpatialInertia(int link_index) {
+//     if (link_index < 0 || link_index >= 3) {
+//         throw std::out_of_range("Link index out of range");
+//     }
+    
+//     // 根据MATLAB代码：
+//     // G = [Ic, zeros(3); zeros(3), m*eye(3)]
+//     // 这是在连杆坐标系原点的空间惯量矩阵，此时默认的是连杆质心和坐标系原点重合，所以没有平行轴定理的修正项
+    
+//     double m = params_.m[link_index];  // 连杆质量
+//     Eigen::Matrix3f Ic_f = params_.Ic[link_index];  // 连杆在质心坐标系的惯量矩阵
+    
+//     // 转换为double
+//     Eigen::Matrix3d Ic = Ic_f.cast<double>();
+    
+//     Matrix6d G = Matrix6d::Zero();
+    
+//     // 左上角: Ic (连杆在质心坐标系的惯量矩阵)
+//     G.block<3, 3>(0, 0) = Ic;
+    
+//     // 右上角: zeros(3)
+//     G.block<3, 3>(0, 3) = Matrix3d::Zero();
+    
+//     // 左下角: zeros(3)
+//     G.block<3, 3>(3, 0) = Matrix3d::Zero();
+    
+//     // 右下角: m * eye(3)
+//     G.block<3, 3>(3, 3) = m * Matrix3d::Identity();
+    
+//     return G;
+// }
+//这里很奇怪，质心如果设置在连杆2的中心坐标应该为（-0.06,0,0）但此时计算出的关节2的力矩反而比设置在连杆末端要更大
+//设置为-0.06才正常，问题暂未解决，先和拉格朗日统一把质心设置在连杆末端
+Matrix6d RobotModel::computeSpatialInertia(int link_index)  {
+    if (link_index < 0 || link_index >= 3) {
+        throw std::out_of_range("Link index out of range");
+    }
+    
+    // 空间惯量矩阵公式：
+    // G = [ I    m·[rc]×^T
+    //       m·[rc]×   m·I ]
+    // 其中 [rc]× 是质心位置向量的反对称矩阵
+    
+    double m = params_.m[link_index];  // 连杆质量
+    Eigen::Vector3f rc_f = params_.rc[link_index];  // 质心位置
+    Eigen::Matrix3f Ic_f = params_.Ic[link_index];  // 惯量矩阵
+    
+    // 转换为double
+    Eigen::Vector3d rc = rc_f.cast<double>();
+    Eigen::Matrix3d Ic = Ic_f.cast<double>();
+    
+    // 计算反对称矩阵
+    Eigen::Matrix3d rc_skew = skew(rc);
+    
+    Matrix6d G = Matrix6d::Zero();
+    
+    // 左上角: I = Ic + m·[rc]×^T·[rc]×
+    // 根据平行轴定理: I = I_c + m([rc]×^T[rc]×)
+    Eigen::Matrix3d I = Ic + m * rc_skew.transpose() * rc_skew;
+    G.block<3, 3>(0, 0) = I;
+    
+    // 右上角: m·[rc]×^T
+    G.block<3, 3>(0, 3) = m * rc_skew.transpose();
+    
+    // 左下角: m·[rc]×
+    G.block<3, 3>(3, 0) = m * rc_skew;
+    
+    // 右下角: m·I
+    G.block<3, 3>(3, 3) = m * Eigen::Matrix3d::Identity();
+    
+    return G;
+}
+
+
+
+Eigen::Vector3f RobotModel::inverseDynamics(const Eigen::Vector3f& q,
+                                           const Eigen::Vector3f& qd,
+                                           const Eigen::Vector3f& qdd) {
+    // 1. 计算正向运动学
+   // computeTransforms(q);
+    // 2. 计算空间速度V
+    forwardVelocity(q,qd);
+    // 3. 计算空间加速度
+    // 注意：需要先计算加速度才能进行逆向动力学
+    // 这里假设已经有计算加速度的函数
+    computeSpatialAccelerations(q,qd,qdd);
+    
+    // 4. 计算力旋量
+    computeWrenches();
+    if(flag_){
+        std::cout<<"F1: " << F1.transpose() << std::endl;
+        std::cout<<"F2: " << F2.transpose() << std::endl;
+        std::cout<<"F3: " << F3.transpose() << std::endl;
+    }
+    // 5. 计算关节力矩
+    // τ_i = F_i^T * A_i
+    tau_[0] = F1.dot(A1);
+    tau_[1] = F2.dot(A2);
+    tau_[2] = F3.dot(A3);
+    
+    return tau_;
+}
+
+// Eigen::Vector3f RobotModel::inverseDynamicsL(const Eigen::Vector3f& q,
+//                                              const Eigen::Vector3f& qd,
+//                                              const Eigen::Vector3f& qdd) {
+//     using Eigen::Matrix3f;
+//     using Eigen::Vector3f;
+
+//     Vector3f tau = Vector3f::Zero();
+
+//     // 提取关节变量
+//     const float q1   = q[0];
+//     const float q2   = q[1];
+//     const float q3   = q[2];
+//     const float qd1  = qd[0];
+//     const float qd2  = qd[1];
+//     const float qd3  = qd[2];
+//     const float qdd1 = qdd[0];
+//     const float qdd2 = qdd[1];
+//     const float qdd3 = qdd[2];
+
+//     (void)q1; // 当前模型中 M/C/G 不显含 q1，但保留变量便于以后扩展
+
+//     // 三角函数
+//     const float c2   = std::cos(q2);
+//     const float s2   = std::sin(q2);
+//     const float c3   = std::cos(q3);
+//     const float s3   = std::sin(q3);
+//     const float c23  = std::cos(q2 + q3);
+//     const float s23  = std::sin(q2 + q3);
+//     const float s2_2 = std::sin(2.0f * q2);
+//     const float s2_23 = std::sin(2.0f * (q2 + q3));
+
+//     // 几何参数
+//     const float l1  = params_.dh[1].a;      // 连杆2长度
+//     const float l2  = params_.dh[2].a;      // 连杆3长度
+//     const float lc1 = params_.rc[1].x();    // 连杆2质心到关节2距离
+//     const float lc2 = params_.rc[2].x();    // 连杆3质心到关节3距离
+
+//     // 质量参数
+//     const float m1 = params_.m[1];          // 连杆2质量
+//     const float m2 = params_.m[2];          // 连杆3质量
+
+//     // 惯量参数
+//     // 与前面推导一致：第1关节用 link1 的 Iyy；link2/link3 用各自主轴惯量
+//     const float Iyy1 = params_.Ic[0](1, 1);
+
+//     const float Ixx2 = params_.Ic[1](0, 0);
+//     const float Iyy2 = params_.Ic[1](1, 1);
+//     const float Izz2 = params_.Ic[1](2, 2);
+
+//     const float Ixx3 = params_.Ic[2](0, 0);
+//     const float Iyy3 = params_.Ic[2](1, 1);
+//     const float Izz3 = params_.Ic[2](2, 2);
+
+//     // 重力大小
+//     // 默认 gravity = (0, 0, -9.81)，这里取其模长并按前面推导使用“向下重力大小 g > 0”
+//     const float g = params_.gravity.norm();
+
+//     // =========================
+//     // 1) 质量矩阵 M(q)
+//     // =========================
+//     Matrix3f M = Matrix3f::Zero();
+
+//     // M11
+//     const float rho = lc1 * c2 + (l1 * c2 + lc2 * c23 - lc1 * c2);
+//     // 上式等价于 l1*c2 + lc2*c23；这样写只是提醒物理含义
+//     const float r3h = l1 * c2 + lc2 * c23;
+
+//     const float M11 =
+//         m1 * lc1 * lc1 * c2 * c2 +
+//         m2 * r3h * r3h +
+//         Iyy1 +
+//         (Ixx2 * s2 * s2 + Iyy2 * c2 * c2) +
+//         (Ixx3 * s23 * s23 + Iyy3 * c23 * c23);
+
+//     // M22, M23, M33
+//     const float M22 =
+//         m1 * lc1 * lc1 +
+//         m2 * (l1 * l1 + lc2 * lc2 + 2.0f * l1 * lc2 * c3) +
+//         Izz2 + Izz3;
+
+//     const float M23 =
+//         m2 * (lc2 * lc2 + l1 * lc2 * c3) +
+//         Izz3;
+
+//     const float M33 =
+//         m2 * lc2 * lc2 +
+//         Izz3;
+
+//     M(0, 0) = M11;
+//     M(1, 1) = M22;
+//     M(1, 2) = M23;
+//     M(2, 1) = M23;
+//     M(2, 2) = M33;
+
+//     // =========================
+//     // 2) 重力项 G(q)
+//     // =========================
+//     Vector3f G = Vector3f::Zero();
+//     G[0] = 0.0f;
+//     G[1] = (m1 * lc1 + m2 * l1) * g * c2 + m2 * lc2 * g * c23;
+//     G[2] = m2 * lc2 * g * c23;
+
+//     // =========================
+//     // 3) 科氏/离心项 h(q,qd)=C(q,qd)*qd
+//     //    这里直接算 h，而不是先显式拼完整 C 矩阵
+//     // =========================
+
+//     // M11 对 q2, q3 的偏导
+//     const float dM11_dq2 =
+//         -m1 * lc1 * lc1 * s2_2
+//         -m2 * (l1 * l1 * s2_2 + 2.0f * l1 * lc2 * std::sin(2.0f * q2 + q3)
+//                + lc2 * lc2 * s2_23)
+//         + (Ixx2 - Iyy2) * s2_2
+//         + (Ixx3 - Iyy3) * s2_23;
+
+//     const float dM11_dq3 =
+//         -2.0f * m2 * lc2 * s23 * (l1 * c2 + lc2 * c23)
+//         + (Ixx3 - Iyy3) * s2_23;
+
+//     Vector3f h = Vector3f::Zero();
+
+//     // 第1行
+//     h[0] = dM11_dq2 * qd1 * qd2 + dM11_dq3 * qd1 * qd3;
+
+//     // 第2行
+//     h[1] =
+//         -0.5f * dM11_dq2 * qd1 * qd1
+//         -m2 * l1 * lc2 * s3 * (2.0f * qd2 * qd3 + qd3 * qd3);
+
+//     // 第3行
+//     h[2] =
+//         -0.5f * dM11_dq3 * qd1 * qd1
+//         +m2 * l1 * lc2 * s3 * qd2 * qd2;
+
+//     // =========================
+//     // 4) 合成力矩 tau = M*qdd + h + G
+//     // =========================
+//     const Vector3f qdd_vec(qdd1, qdd2, qdd3);
+//     tau = M * qdd_vec + h + G;
+
+//     tau_ = tau;
+//     return tau_;
+// }
+
+Eigen::Vector3f RobotModel::inverseDynamicsL(const Eigen::Vector3f& q,
+                                             const Eigen::Vector3f& qd,
+                                             const Eigen::Vector3f& qdd) {
+    using Eigen::Matrix3f;
+    using Eigen::Vector3f;
+
+    Vector3f tau = Vector3f::Zero();
+
+    // =========================
+    // 1) 提取关节变量
+    // =========================
+    const float q1   = q[0];
+    const float q2   = q[1];
+    const float q3   = q[2];
+
+    const float qd1  = qd[0];
+    const float qd2  = qd[1];
+    const float qd3  = qd[2];
+
+    const float qdd1 = qdd[0];
+    const float qdd2 = qdd[1];
+    const float qdd3 = qdd[2];
+
+    (void)q1; // 当前 M,C,G 不显含 q1，但保留以便后续扩展
+
+    // =========================
+    // 2) 参数读取
+    // =========================
+    // 几何参数
+    const float l1  = params_.dh[1].a;      // 连杆2长度
+    const float l2  = params_.dh[2].a;      // 连杆3长度（本公式里不直接用到，仅用于结构一致性）
+    const float lc1 = params_.rc[1].x()+l1/1.0;    // 连杆2质心距关节2
+    const float lc2 = params_.rc[2].x()+l2/1.0;    // 连杆3质心距关节3
+
+    (void)l2;
+
+    // 质量参数
+    const float m1 = params_.m[1];          // 连杆2质量
+    const float m2 = params_.m[2];          // 连杆3质量
+
+    // 惯量参数
+    const float Iyy1 = params_.Ic[0](1, 1); // 第1轴等效惯量（按你现有参数结构）
+
+    const float Ixx2 = params_.Ic[1](0, 0);
+    const float Iyy2 = params_.Ic[1](1, 1);
+    const float Izz2 = params_.Ic[1](2, 2);
+
+    const float Ixx3 = params_.Ic[2](0, 0);
+    const float Iyy3 = params_.Ic[2](1, 1);
+    const float Izz3 = params_.Ic[2](2, 2);
+
+    // 重力大小
+    // 默认 gravity=(0,0,-9.81)，这里取模长作为 g>0 使用
+    const float g = params_.gravity.norm();
+
+    // =========================
+    // 3) 三角函数
+    // =========================
+    const float c2   = std::cos(q2);
+    const float s2   = std::sin(q2);
+    const float c3   = std::cos(q3);
+    const float s3   = std::sin(q3);
+    const float c23  = std::cos(q2 + q3);
+    const float s23  = std::sin(q2 + q3);
+
+    const float sin2q2   = std::sin(2.0f * q2);
+    const float sin2q23  = std::sin(2.0f * (q2 + q3));
+    const float sin2q2q3 = std::sin(2.0f * q2 + q3);
+
+    // =========================
+    // 4) 质量矩阵 M(q)
+    // =========================
+    Matrix3f M = Matrix3f::Zero();
+
+    // M11
+    const float r3h = l1 * c2 + lc2 * c23;  // 连杆3质心的水平投影半径
+
+    const float M11 =
+        m1 * lc1 * lc1 * c2 * c2
+        + m2 * r3h * r3h
+        + Iyy1
+        + (Ixx2 * s2 * s2 + Iyy2 * c2 * c2)
+        + (Ixx3 * s23 * s23 + Iyy3 * c23 * c23);
+
+    // M22
+    const float M22 =
+        m1 * lc1 * lc1
+        + m2 * (l1 * l1 + lc2 * lc2 + 2.0f * l1 * lc2 * c3)
+        + Izz2 + Izz3;
+
+    // M23 = M32
+    const float M23 =
+        m2 * (lc2 * lc2 + l1 * lc2 * c3)
+        + Izz3;
+
+    // M33
+    const float M33 =
+        m2 * lc2 * lc2
+        + Izz3;
+
+    M(0, 0) = M11;
+    M(0, 1) = 0.0f;
+    M(0, 2) = 0.0f;
+
+    M(1, 0) = 0.0f;
+    M(1, 1) = M22;
+    M(1, 2) = M23;
+
+    M(2, 0) = 0.0f;
+    M(2, 1) = M23;
+    M(2, 2) = M33;
+
+    // =========================
+    // 5) 重力向量 G(q)
+    // =========================
+    Vector3f G = Vector3f::Zero();
+
+    G[0] = 0.0f;
+    G[1] = (m1 * lc1 + m2 * l1) * g * c2 + m2 * lc2 * g * c23;
+    G[2] = m2 * lc2 * g * c23;
+
+    // =========================
+    // 6) 速度项 h(q,qd) = C(q,qd) * qd
+    //    直接按推导公式计算，不单独显式构造 C 矩阵
+    // =========================
+
+    // dM11/dq2
+    const float dM11_dq2 =
+        -m1 * lc1 * lc1 * sin2q2
+        -m2 * (
+            l1 * l1 * sin2q2
+            + 2.0f * l1 * lc2 * sin2q2q3
+            + lc2 * lc2 * sin2q23
+        )
+        + (Ixx2 - Iyy2) * sin2q2
+        + (Ixx3 - Iyy3) * sin2q23;
+
+    // dM11/dq3
+    const float dM11_dq3 =
+        -2.0f * m2 * lc2 * s23 * (l1 * c2 + lc2 * c23)
+        + (Ixx3 - Iyy3) * sin2q23;
+
+    Vector3f h = Vector3f::Zero();
+
+    // h1
+    h[0] = dM11_dq2 * qd1 * qd2
+         + dM11_dq3 * qd1 * qd3;
+
+    // h2
+    h[1] = -0.5f * dM11_dq2 * qd1 * qd1
+         - m2 * l1 * lc2 * s3 * (2.0f * qd2 * qd3 + qd3 * qd3);
+
+    // h3
+    h[2] = -0.5f * dM11_dq3 * qd1 * qd1
+         + m2 * l1 * lc2 * s3 * qd2 * qd2;
+
+    // =========================
+    // 7) 合成力矩 tau = M*qdd + h + G
+    // =========================
+    const Vector3f qdd_vec(qdd1, qdd2, qdd3);
+    tau = M * qdd_vec + h + G;
+
+    tau_ = tau;
+    return tau_;
+}
+
+
+void RobotModel::computeWrenches() {
+    // 检查是否已计算速度和加速度
+    if (V1.size() == 0 || Vd1.size() == 0) {
+        throw std::runtime_error("Must compute velocities and accelerations first");
+    }
+    
+    // 末端力旋量为0（无外力）或使用setEndEffectorWrench设置的值
+    // F4 已经在构造函数中初始化为0
+    
+    // 逆向迭代计算力旋量
+    
+    // 关节3: F3 = adjoint(inv_transform(T3_4))' * F4 + G3*Vd3 - ad(V3)'*(G3*V3)
+    F3 = Ad_T3_4_inv_.transpose() * F4 + G_list_[2] * Vd3 - ad(V3).transpose() * (G_list_[2] * V3);
+    
+    // 关节2: F2 = adjoint(inv_transform(T2_3))' * F3 + G2*Vd2 - ad(V2)'*(G2*V2)
+    F2 = Ad_T2_3_inv_.transpose() * F3 + G_list_[1] * Vd2 - ad(V2).transpose() * (G_list_[1] * V2);
+    
+    // 关节1: F1 = adjoint(inv_transform(T1_2))' * F2 + G1*Vd1 - ad(V1)'*(G1*V1)
+    F1 = Ad_T1_2_inv_.transpose() * F2 + G_list_[0] * Vd1 - ad(V1).transpose() * (G_list_[0] * V1);
+}
+
+void RobotModel::setEndEffectorWrench(const Eigen::VectorXd& F_tip) {
+    if (F_tip.size() != 6) {
+        throw std::invalid_argument("End effector wrench must be 6D vector");
+    }
+    F4 = F_tip;
+}
+
+Vector3f RobotModel::computeGravityCompensation(const Vector3f& q) 
 {
     // 简化的重力补偿计算
     const float a2 = params_.dh[1].a;
@@ -710,7 +1220,7 @@ void RobotModel::calculateZeroConfigPoseM()
     zero_config_pose_M_ = T0_1 * T1_2 * T2_3;
 }
 
- Matrix3d RobotModel::skew(const  Vector3d& w) const {
+ Matrix3d RobotModel::skew(const  Vector3d& w)  {
      Matrix3d wx;
     wx << 0, -w(2), w(1),
           w(2), 0, -w(0),
@@ -719,7 +1229,7 @@ void RobotModel::calculateZeroConfigPoseM()
 }
 
 // 辅助函数：计算螺旋轴的指数映射
- Matrix4d RobotModel::expm_screw(const  VectorXd& S, double theta) const {
+ Matrix4d RobotModel::expm_screw(const  VectorXd& S, double theta)  {
     // 分离角速度和线速度部分
      Vector3d w = S.segment(0, 3);
      Vector3d v = S.segment(3, 3);
@@ -751,7 +1261,7 @@ void RobotModel::calculateZeroConfigPoseM()
 }
 
 
-Matrix6d RobotModel::adjoint(const  Matrix4d& T) const
+Matrix6d RobotModel::adjoint(const  Matrix4d& T) 
 {
     Matrix6d AdT;
     
@@ -776,7 +1286,7 @@ Matrix6d RobotModel::adjoint(const  Matrix4d& T) const
 }
 
 
-Eigen::Matrix<double, 6, 6> RobotModel::ad(const Eigen::VectorXd& A) const
+Eigen::Matrix<double, 6, 6> RobotModel::ad(const Eigen::VectorXd& A) 
 {
     // 检查输入维度
     if (A.size() != 6) {

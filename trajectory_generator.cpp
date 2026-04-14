@@ -15,7 +15,7 @@ void TrajectoryGenerator::setParameters(const TrajectoryParams& params)
                          (params.spiralRate  != params_.spiralRate)  ||
                          (params.spiralAmplitude != params_.spiralAmplitude);
 
-    params_ = params;  // 只赋值一次
+    params_ = params;  
 
     if (needRecompute) {
         precomputedSpiralTrajectory_ = generateTrajectory(0.001f);

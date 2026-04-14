@@ -167,7 +167,7 @@ namespace damiao
     }Limit_param;
 
     //电机PMAX DQMAX TAUMAX参数
-    Limit_param limit_param[Num_Of_Motor]=
+    inline Limit_param limit_param[Num_Of_Motor]=
             {
                     {12.5, 30, 10 }, // DM4310
                     {12.5, 50, 10 }, // DM4310_48V
