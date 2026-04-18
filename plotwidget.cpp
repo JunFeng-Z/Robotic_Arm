@@ -5,6 +5,8 @@
 #include <QPainterPath>
 #include <QResizeEvent>
 #include <QDateTime>
+#include <QFile>
+#include <QTextStream>
 #include <cmath>
 #include <algorithm>
 
@@ -29,7 +31,10 @@ PlotWidget::PlotWidget(QWidget *parent)
       gridColor_(QColor("#dee2e6")),
       axisColor_(QColor("#495057")),
       textColor_(QColor("#212529")),
-      isPaused_(false)
+      isPaused_(false),
+      recording_(false),
+      dataFile_(nullptr),
+      dataStream_(nullptr)
 {
     setMinimumSize(320, 240);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -502,6 +507,13 @@ void PlotWidget::addDataPoint(int channel, float value)
         if (dataSeries_[channel].points.size() > maxPoints) {
             dataSeries_[channel].points.removeFirst();
         }
+
+        // 如果正在记录，将数据写入文件
+        if (recording_ && dataFile_ && dataStream_) {
+            // 写入格式：时间, 通道, 值
+            *dataStream_ << currentTime_ << ", " << channel << ", " << value << "\n";
+            dataStream_->flush();  // 立即刷新，防止数据丢失
+        }
     }
 }
 
@@ -515,5 +527,114 @@ void PlotWidget::resume()
 {
     isPaused_ = false;
     update();
+}
+
+bool PlotWidget::saveToFile(const QString &filename)
+{
+    QFile file(filename);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        return false;
+    }
+
+    QTextStream out(&file);
+    out.setRealNumberPrecision(6);
+    // 设置UTF-8编码，避免中文乱码
+    out.setCodec("UTF-8");
+    out.setGenerateByteOrderMark(true);  // 写入UTF-8 BOM
+
+    // 写入文件头
+    out << "# " << plotTitle_ << "\n";
+    out << "# Time (s)";
+    for (int i = 0; i < 3; ++i) {
+        if (dataSeries_[i].visible) {
+            out << ", " << dataSeries_[i].label;
+        } else {
+            out << ", -";
+        }
+    }
+    out << "\n";
+
+    // 确定数据点的最大数量
+    int maxPoints = 0;
+    for (const auto &series : dataSeries_) {
+        if (series.visible) {
+            maxPoints = std::max(maxPoints, series.points.size());
+        }
+    }
+
+    if (maxPoints == 0) {
+        // 没有数据
+        out << "# No data\n";
+        file.close();
+        return true;
+    }
+
+    // 写入数据
+    // 由于各通道数据点的时间戳可能不完全一致，我们分别写入每个通道的数据
+    // 但为了简化，我们假设数据点的时间戳是对齐的（通过updateData(QVector<float>)更新）
+    // 这里采用简单方法：分别写入每个通道的数据，每个通道包含时间和值
+    for (int ch = 0; ch < 3; ++ch) {
+        const auto &series = dataSeries_[ch];
+        if (!series.visible) continue;
+
+        out << "\n# Channel " << (ch + 1) << ": " << series.label << "\n";
+        out << "# Time, Value\n";
+        for (const auto &point : series.points) {
+            out << point.first << ", " << point.second << "\n";
+        }
+    }
+
+    file.close();
+    return true;
+}
+
+bool PlotWidget::startRecording(const QString &filename)
+{
+    // 如果已经在记录，先停止当前记录
+    if (recording_) {
+        stopRecording();
+    }
+
+    dataFile_ = new QFile(filename);
+    if (!dataFile_->open(QIODevice::WriteOnly | QIODevice::Text)) {
+        delete dataFile_;
+        dataFile_ = nullptr;
+        return false;
+    }
+
+    dataStream_ = new QTextStream(dataFile_);
+    dataStream_->setRealNumberPrecision(6);
+    // 设置UTF-8编码，避免中文乱码
+    dataStream_->setCodec("UTF-8");
+    dataStream_->setGenerateByteOrderMark(true);  // 写入UTF-8 BOM
+
+    // 写入文件头
+    *dataStream_ << "# " << plotTitle_ << " - realtime recording\n";
+    *dataStream_ << "# format: time(s), channel_index(0-2), value\n";
+    *dataStream_ << "# channel info:\n";
+    for (int i = 0; i < 3; ++i) {
+        *dataStream_ << "#  channel " << i << ": " << dataSeries_[i].label << "\n";
+    }
+    *dataStream_ << "\n";
+
+    recording_ = true;
+    return true;
+}
+
+void PlotWidget::stopRecording()
+{
+    if (recording_) {
+        recording_ = false;
+        if (dataStream_) {
+            dataStream_->flush();
+            delete dataStream_;
+            dataStream_ = nullptr;
+        }
+        if (dataFile_) {
+            dataFile_->close();
+            delete dataFile_;
+            dataFile_ = nullptr;
+        }
+    }
 }
 

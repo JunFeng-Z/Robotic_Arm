@@ -6,6 +6,8 @@
 #include <QPair>
 #include <QColor>
 #include <QString>
+#include <QFile>
+#include <QTextStream>
 
 class PlotWidget : public QWidget
 {
@@ -68,6 +70,14 @@ public:
     // 设置通道标签
     void setChannelLabel(int channel, const QString &label);
 
+    // 保存数据到文件
+    bool saveToFile(const QString &filename);
+
+    // 实时记录控制
+    bool startRecording(const QString &filename);
+    void stopRecording();
+    bool isRecording() const { return recording_; }
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -129,6 +139,11 @@ private:
 
     // 绘图区域
     QRectF plotArea_;
+
+    // 数据记录
+    bool recording_;
+    QFile* dataFile_;
+    QTextStream* dataStream_;
 
     // 默认颜色
     static const QVector<QColor> defaultColors_;

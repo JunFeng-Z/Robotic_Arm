@@ -50,6 +50,7 @@ private slots:
     void onTorqueCommandSent(int jointIndex, float torque);
     void onControlStatusChanged(bool running);
     void onClearDataClicked();
+    void onCleartextDataClicked();
     void onPausePlotClicked();
     void onResumePlotClicked();
 
@@ -66,6 +67,7 @@ private:
     void DisableMotor();
 
     void adjustParameter(int index, float delta);
+    void startDataRecording();
 
 
     QTextEdit *logText_ = nullptr;
@@ -84,6 +86,7 @@ private:
     QPushButton *refreshBtn_ = nullptr;
     QPushButton *enableBtn_ = nullptr;
     QPushButton *disableBtn_ = nullptr;
+    QPushButton *cleartextBtn_ = nullptr;
 
     QPushButton *initTrackBtn_ = nullptr;
     QPushButton *teachBtn_ = nullptr;

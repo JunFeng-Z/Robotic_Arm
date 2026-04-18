@@ -46,6 +46,7 @@ void ControlWorker::updateJointState(const JointState &state)
 {
     //这里是否考虑加上时间辍，三个电机的时间辍应当匹配才能组合为一个状态
     QMutexLocker locker(&stateMutex_);
+    std::cout<<"Received joint state: index=" << state.jointIndex << ", pos=" << state.position << ", vel=" << state.velocity << ", acc=" << state.acceleration << std::endl;
     if (state.jointIndex >= 1 && state.jointIndex <= 3) {
         jointStates_[state.jointIndex] = state;
     }
@@ -83,37 +84,59 @@ void ControlWorker::updateModelFromParams()
 //控制循环函数，持续计算控制命令并发送
 void ControlWorker::controlLoop()
 {
-    auto nextWakeTime = std::chrono::steady_clock::now();
+    try {
+        auto nextWakeTime = std::chrono::steady_clock::now();
 
-    while (running_.load()) {
-        // 计算下一次唤醒时间
-        //controlPeriodMs_传进来的控制周期，设定的是1ms
-        nextWakeTime += std::chrono::milliseconds(controlPeriodMs_);
-
-        // 获取当前时间
-        float currentTime = getCurrentTime();
-        float elapsedTime = currentTime - startTime_;
-
-        // 检查是否超出轨迹时长
+        std::cout<<running_.load()<<std::endl;
+        while (running_.load()) 
         {
-            QMutexLocker locker(&paramsMutex_);
-            if (elapsedTime > params_.trajectory.duration) {
-                //这里增加发送0力矩的函数，确保机器人停止
-                emit logMessage(QStringLiteral("轨迹跟踪已完成，时长: %1秒").arg(elapsedTime, 0, 'f', 2));
-                emit controlStatusChanged(false);
-                running_.store(false);
+            nextWakeTime += std::chrono::milliseconds(controlPeriodMs_);
+
+            switch (currentAlgorithm_) 
+            {
+            case ControlAlgorithm::GravityCompensation: 
+            {
+                if (!GravityCompensation()) {
+                    throw std::runtime_error("Failed to compute control command using gravity compensation");
+                }
                 break;
             }
-        }
+            case ControlAlgorithm::SlidingMode: 
+            {
+                float currentTime = getCurrentTime();
+                float elapsedTime = currentTime - startTime_;
 
-        bool success = Slidingmode_controller(elapsedTime);
-        if (!success) {
-            emit logMessage(QStringLiteral("时间 t=%1 时滑模控制计算失败").arg(elapsedTime, 0, 'f', 2));
-            break;
-        }
+                {
+                    QMutexLocker locker(&paramsMutex_);
+                    if (elapsedTime > params_.trajectory.duration) {
+                        emit logMessage(QStringLiteral("轨迹跟踪已完成，时长: %1秒")
+                                            .arg(elapsedTime, 0, 'f', 2));
+                        running_.store(false);
+                        break;
+                    }
+                }
 
-        // 精确休眠到下一个控制周期
-        std::this_thread::sleep_until(nextWakeTime);
+                if (!Slidingmode_controller(elapsedTime)) {
+                    throw std::runtime_error("Failed to compute control command using sliding mode controller");
+                }
+
+                break;
+            }
+            case ControlAlgorithm::PID: 
+            {
+                break;
+            }
+            default:
+            {
+                break;
+            }
+            }
+
+            std::this_thread::sleep_until(nextWakeTime);
+        }
+    } catch (const std::exception& e) {
+        emit logMessage(QStringLiteral("控制线程异常: %1").arg(e.what()));
+        running_.store(false);
     }
 
     emit controlStatusChanged(false);
@@ -143,6 +166,33 @@ void ControlWorker::GetReferenceTorques()
         qd_d.push_back(qd);
         qdd_d.push_back(qdd);
     }
+}
+
+void ControlWorker::SwitchControlAlgorithm(ControlAlgorithm algorithm)
+{
+    currentAlgorithm_ = algorithm;
+    emit logMessage(QStringLiteral("控制算法已切换"));
+}
+
+bool ControlWorker::GravityCompensation()
+{
+    //emit logMessage(QStringLiteral("执行重力补偿控制算法"));
+    // 获取当前关节状态
+    std::array<JointState, 4> currentStates;
+    {
+        QMutexLocker locker(&stateMutex_);
+        currentStates = jointStates_;
+    }
+    Eigen::Vector3f tau = robotModel_->gravityCompensation(
+        Eigen::Vector3f(currentStates[1].position, currentStates[2].position, currentStates[3].position)
+    );
+    std::cout<<"Joint positions: " << currentStates[1].position << ", " << currentStates[2].position << ", " << currentStates[3].position << std::endl;
+    // 发送扭矩命令到电机
+    std::cout << "Gravity Compensation Torques: " << tau.transpose() << std::endl;
+    emit torqueCommandSent(1, tau[0]);
+    emit torqueCommandSent(2, tau[1]);
+    emit torqueCommandSent(3, tau[2]);
+    return true;
 }
 
 bool ControlWorker::Slidingmode_controller(float t)
@@ -324,6 +374,7 @@ RobotController::RobotController(QObject *parent)
 
     // 启动线程循环，等待调用startControl()后才执行控制循环
     controlThread_->start();
+    SwitchControlAlgorithm(ControlAlgorithm::GravityCompensation);  // 默认使用重力补偿算法
 }
 
 RobotController::~RobotController()
@@ -364,6 +415,19 @@ void RobotController::updateJointState(int jointIndex, float position, float vel
 
     // 同时发送状态更新信号
     emit jointStateChanged(state);
+}
+void RobotController::SwitchControlAlgorithm(ControlAlgorithm algorithm)
+{
+    currentAlgorithm_ = algorithm;
+    if (worker_) {
+        QMetaObject::invokeMethod(worker_, "SwitchControlAlgorithm",
+                                 Qt::QueuedConnection,
+                                 Q_ARG(ControlAlgorithm, algorithm));
+    }
+    else
+    {
+        emit logMessage(QStringLiteral("错误：worker对象未初始化"));
+    }
 }
 
 void RobotController::startControl()
@@ -407,11 +471,11 @@ void RobotController::stopControl()
 
 void RobotController::setControlParams(const ControlParams &params)
 {
-    if (worker_) {
-        QMetaObject::invokeMethod(worker_, "setControlParams",
-                                 Qt::QueuedConnection,
-                                 Q_ARG(ControlParams, params));
-    }
+    // if (worker_) {
+    //     QMetaObject::invokeMethod(worker_, "setControlParams",
+    //                              Qt::QueuedConnection,
+    //                              Q_ARG(ControlParams, params));
+    // }
 
     emit logMessage(QStringLiteral("控制参数已更新"));
 }

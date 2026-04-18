@@ -36,6 +36,7 @@ public slots:
     void setControlParams(const ControlParams &params);
     void initTrajectory();
     void clearMoveIndex();
+    void SwitchControlAlgorithm(ControlAlgorithm algorithm);
 
 signals:
     void controlCommandSent(int jointIndex, float targetPos, float targetVel);
@@ -75,6 +76,12 @@ private:
     void updateModelFromParams();  // 根据params_更新模型和生成器
     bool Slidingmode_controller(float t);
 
+    /**
+     * @brief 重力补偿控制算法实现
+      * @return 是否成功计算并发送重力补偿命令
+     */
+    bool GravityCompensation();
+
 private:
     std::array<JointState, 4> jointStates_;  // 索引1-3对应关节1-3
     mutable QMutex stateMutex_;  // 保护关节状态
@@ -96,6 +103,7 @@ private:
     std::vector<Eigen::Vector3f> q_d;
     std::vector<Eigen::Vector3f> qd_d;
     std::vector<Eigen::Vector3f> qdd_d;
+    ControlAlgorithm currentAlgorithm_;
 };
 
 /**
@@ -170,6 +178,11 @@ public:
      * @brief 是否正在运行控制算法
      */
     bool isControlRunning() const { return controlRunning_; }
+
+    /**
+     * @brief 切换控制算法
+     */
+    void SwitchControlAlgorithm(ControlAlgorithm algorithm);
 
 signals:
     /**
@@ -262,6 +275,7 @@ private:
     ControlWorker *worker_ = nullptr;
     QThread *controlThread_ = nullptr;
     std::atomic_bool controlRunning_{false};
+    ControlAlgorithm currentAlgorithm_{ControlAlgorithm::GravityCompensation};
 };
 
 #endif // ROBOTCONTROLLER_H

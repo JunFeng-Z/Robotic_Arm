@@ -121,6 +121,13 @@ public:
 
     void setFlag(bool flag) { flag_ = flag; }
 
+    /**
+     * @brief 计算重力补偿力矩 (Closed_Arm_Modle_thetch)
+     * @param q 关节角度 [q1, q2, q3] (rad)
+     * @return [tau1, tau2, tau3] 重力补偿力矩
+     */
+    Eigen::Vector3f gravityCompensation(const Eigen::Vector3f& q) const;
+
 
 
 private:

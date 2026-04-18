@@ -1144,6 +1144,52 @@ Eigen::Vector3f RobotModel::inverseDynamicsL(const Eigen::Vector3f& q,
 }
 
 
+Eigen::Vector3f RobotModel::gravityCompensation(const Eigen::Vector3f& q) const
+{
+    using Eigen::Vector3f;
+
+    Vector3f G = Vector3f::Zero();
+
+    // 1) 提取关节角
+    const float q2 = q[1];
+    const float q3 = q[2];
+
+    // 2) 参数读取
+    const float l1 = params_.dh[1].a;   // 连杆2长度
+    const float l2 = params_.dh[2].a;   // 连杆3长度
+
+    // 这里请确认 rc 的定义！
+    // 若 rc[i] 已经是“本关节到质心”的向量，就不要再加 l1/l2
+    const float lc1 = params_.rc[1].x() + l1/1.0;
+    const float lc2 = params_.rc[2].x() + l2/1.0;
+
+    (void)l2;
+
+    const float m1 = params_.m[1];      // 连杆2质量
+    const float m2 = params_.m[2];      // 连杆3质量
+
+    // 重力大小
+    const float g = params_.gravity.norm();
+
+    // 3) 三角函数
+    const float c2  = std::cos(q2);
+    const float c23 = std::cos(q2 + q3);
+
+    // std::cout << "Gravity Compensation Debug Info:" << std::endl;
+    // std::cout << "q2: " << q2 << ", q3: " << q3 << std::endl;
+    // std::cout << "lc1: " << lc1 << ", lc2: " << lc2 << std::endl;
+    // std::cout << "m1: " << m1 << ", m2: " << m2 << std::endl;
+    // std::cout << "g: " << g << std::endl;
+    // 4) 重力向量
+    // 若第1轴是竖直转轴，则 G[0] = 0
+    G[0] = 0.0f;
+    G[1] = (m1 * lc1 + m2 * l1) * g * c2 + m2 * lc2 * g * c23;
+    G[2] = m2 * lc2 * g * c23;
+
+    return G;
+}
+
+
 void RobotModel::computeWrenches() {
     // 检查是否已计算速度和加速度
     if (V1.size() == 0 || Vd1.size() == 0) {

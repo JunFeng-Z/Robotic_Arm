@@ -21,6 +21,8 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QSerialPortInfo>
+#include <QDateTime>
+#include <QDir>
 
 namespace {
 speed_t baudFromText(const QString &baudText, bool *fallback)
@@ -86,6 +88,7 @@ QGroupBox *MainWindow::buildConnectionPanel()
     refreshBtn_ = new QPushButton(QStringLiteral("刷新设备"));
     enableBtn_ = new QPushButton(QStringLiteral("使能电机"));
     disableBtn_ = new QPushButton(QStringLiteral("失能电机"));
+    cleartextBtn_ = new QPushButton(QStringLiteral("清除日志"));
 
     layout->addWidget(portLabel, 0, 0);
     layout->addWidget(portCombo_, 1, 0);
@@ -101,6 +104,7 @@ QGroupBox *MainWindow::buildConnectionPanel()
     layout->addWidget(disableBtn_, 4, 1);
 
     layout->addWidget(timeoutCombo_, 5, 0);
+    layout->addWidget(cleartextBtn_, 5, 1);
 
     return group;
 }
@@ -300,6 +304,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(setDurationBtn_, &QPushButton::clicked, this, &MainWindow::onSetDurationClicked);
     connect(enableBtn_, &QPushButton::clicked, this, &MainWindow::onEnableClicked);
     connect(disableBtn_, &QPushButton::clicked, this, &MainWindow::onDisableClicked);
+    connect(cleartextBtn_, &QPushButton::clicked, this, &MainWindow::onCleartextDataClicked);
     connect(initTrackBtn_, &QPushButton::clicked, this, &MainWindow::onInitTrackClicked);
     connect(teachBtn_, &QPushButton::clicked, this, &MainWindow::onTeachClicked);
     connect(runAlgoBtn_, &QPushButton::clicked, this, &MainWindow::onRunAlgoClicked);
@@ -318,6 +323,10 @@ MainWindow::MainWindow(QWidget *parent)
     simulationTimer_ = new QTimer(this);
     simulationTimer_->setInterval(50);  // 50ms更新间隔，约20Hz
     connect(simulationTimer_, &QTimer::timeout, this, &MainWindow::onSimulationTimer);
+
+    // 自动开始数据记录（实时写入文件，防止系统崩溃）
+    startDataRecording();
+
     simulationTimer_->start();
 
     this->onRefreshDevicesClicked();
@@ -325,6 +334,13 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
+    // 停止所有数据记录
+    for (int i = 0; i < 4; ++i) {
+        if (plotWidgets_[i]) {
+            plotWidgets_[i]->stopRecording();
+        }
+    }
+
     stopWorkers();
     if (robotController_) {
         robotController_->stopControl();
@@ -444,9 +460,9 @@ void MainWindow::onJointStateUpdated(const JointState &state)
 void MainWindow::onTorqueCommandSent(int jointIndex, float torque)
 {
     // 更新日志
-    appendLog(QStringLiteral("关节%1 扭矩: %2 N·m")
-                  .arg(jointIndex)
-                  .arg(torque, 0, 'f', 3));
+    // appendLog(QStringLiteral("关节%1 扭矩: %2 N·m")
+    //               .arg(jointIndex)
+    //               .arg(torque, 0, 'f', 3));
 
     // 更新扭矩绘图
     if (plotWidgets_[2] && jointIndex >= 1 && jointIndex <= 3) {
@@ -456,6 +472,7 @@ void MainWindow::onTorqueCommandSent(int jointIndex, float torque)
 
 void MainWindow::onSimulationTimer()
 {
+    return; // 启用模拟数据用于测试
     // 生成模拟数据（正弦波）用于测试绘图
     static float time = 0.0f;
     const float dt = 0.05f;  // 50ms间隔
@@ -544,7 +561,8 @@ void MainWindow::startWorkers()
 
 void MainWindow::stopWorkers()
 {
-    // 先通知停止
+    this->DisableMotor();
+    QThread::msleep(100);    // 先通知停止
     if (serialRxWorker_) {
         serialRxWorker_->stop();
     }
@@ -607,6 +625,14 @@ void MainWindow::onRunAlgoClicked()
         robotController_->startControl();
         appendLog(QStringLiteral("控制算法已启动"));
     }
+}
+
+void MainWindow::onCleartextDataClicked()
+{
+    if(logText_) {
+        logText_->clear();
+    }
+    appendLog(QStringLiteral("日志已清除"));
 }
 
 void MainWindow::onClearDataClicked()
@@ -699,4 +725,38 @@ void MainWindow::adjustParameter(int index, float delta)
                   .arg(oldValue, 0, 'f', 3)
                   .arg(newValue, 0, 'f', 3)
                   .arg(delta, 0, 'f', 3));
+}
+
+void MainWindow::startDataRecording()
+{
+    // 创建logs目录（如果不存在）
+    QDir logsDir("logs");
+    if (!logsDir.exists()) {
+        logsDir.mkpath(".");
+        appendLog(QStringLiteral("创建日志目录: logs/"));
+    }
+
+    // 获取当前时间戳，用于文件名
+    QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss");
+
+    // 为每个绘图窗口开始记录
+    const char* plotNames[] = {
+        "joint_position",
+        "joint_velocity",
+        "joint_torque",
+        "end_effector_position"
+    };
+
+    for (int i = 0; i < 4; ++i) {
+        if (plotWidgets_[i]) {
+            QString filename = QString("logs/%1_%2.txt").arg(plotNames[i]).arg(timestamp);
+            if (plotWidgets_[i]->startRecording(filename)) {
+                appendLog(QStringLiteral("开始记录 %1 到文件: %2")
+                              .arg(plotNames[i])
+                              .arg(filename));
+            } else {
+                appendLog(QStringLiteral("无法开始记录 %1").arg(plotNames[i]));
+            }
+        }
+    }
 }

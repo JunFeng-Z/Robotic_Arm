@@ -4,7 +4,7 @@
 #include <eigen3/Eigen/Dense>
 #include <vector>
 #include <iostream>
-
+#include <QMetaType>
 /**
  * @brief 机器人通用数据类型定义
  */
@@ -34,6 +34,7 @@ struct JointState
         : jointIndex(idx), position(pos), velocity(vel), acceleration(acc), timestamp(t) {}
 };
 
+Q_DECLARE_METATYPE(JointState);
 /**
  * @brief DH参数结构体
  */
@@ -89,7 +90,7 @@ struct RobotParams
         //这里改成0.06,牛顿递推结果才是正确的，改成0.12,拉格朗日方法的结果才是正确的
         // 质心位置 (假设在连杆中心)
         rc[0] = Vector3f(0, 0, 0);
-        rc[1] = Vector3f(-0.00f, 0, 0);  // 在连杆中间
+        rc[1] = Vector3f(-0.00f, 0, 0); 
         rc[2] = Vector3f(-0.00f, 0, 0);
 
         // 惯量矩阵 (根据C#代码中的值)
@@ -117,6 +118,13 @@ enum class TrajectoryType
     Spiral  // 螺旋线轨迹
 };
 
+enum class ControlAlgorithm
+{
+    GravityCompensation,  // 重力补偿
+    SlidingMode,  // 滑模控制实现轨迹跟踪
+    PID          // PID控制
+};
+Q_DECLARE_METATYPE(ControlAlgorithm)
 /**
  * @brief 轨迹参数结构体
  */
