@@ -121,8 +121,8 @@ enum class TrajectoryType
 enum class ControlAlgorithm
 {
     GravityCompensation,  // 重力补偿
-    SlidingMode,  // 滑模控制实现轨迹跟踪
-    PID          // PID控制
+    PlannedTrajectoryTracking,  // 预定轨迹跟踪
+    TeachingTrajectoryTracking   // 示教轨迹跟踪
 };
 Q_DECLARE_METATYPE(ControlAlgorithm)
 /**

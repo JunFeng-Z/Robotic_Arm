@@ -117,41 +117,28 @@ QGroupBox *MainWindow::buildRunPanel()
     layout->setAlignment(Qt::AlignTop);
 
     auto *row1 = new QHBoxLayout;
-    initTrackBtn_ = new QPushButton(QStringLiteral("轨迹跟踪初始化"));
-    teachBtn_ = new QPushButton(QStringLiteral("示教"));
-    row1->addWidget(initTrackBtn_);
+    teachBtn_ = new QPushButton(QStringLiteral("机械臂拖拽示教"));
     row1->addWidget(teachBtn_);
     layout->addLayout(row1);
 
     clearDataBtn_ = new QPushButton(QStringLiteral("清除图表"));
     pausePlotBtn_ = new QPushButton(QStringLiteral("暂停图表"));
     resumePlotBtn_ = new QPushButton(QStringLiteral("重启图表"));
-    setDurationBtn_ = new QPushButton(QStringLiteral("设置时长"));
+    
     runAlgoBtn_ = new QPushButton(QStringLiteral("运行算法"));
+    Algswitch = new QComboBox;
+    Algswitch->addItems({QStringLiteral("重力补偿"), QStringLiteral("预定轨迹跟踪"), QStringLiteral("示教轨迹跟踪")});
 
-    layout->addWidget(clearDataBtn_);
     auto *plotControlRow = new QHBoxLayout;
     plotControlRow->addWidget(pausePlotBtn_);
     plotControlRow->addWidget(resumePlotBtn_);
+    auto *AlgControlRow = new QHBoxLayout;
+    AlgControlRow->addWidget(runAlgoBtn_);
+    AlgControlRow->addWidget(Algswitch);
+    layout->addLayout(AlgControlRow);
     layout->addLayout(plotControlRow);
-    layout->addWidget(setDurationBtn_);
-    layout->addWidget(runAlgoBtn_);
+    layout->addWidget(clearDataBtn_);
 
-    auto *durationRow = new QHBoxLayout;
-    durationRow->setContentsMargins(0, 0, 0, 0);
-    durationRow->setSpacing(8);
-    durationRow->addWidget(new QLabel(QStringLiteral("总时长")));
-
-    secondsBox_ = new QSpinBox;
-    secondsBox_->setRange(1, 120);
-    secondsBox_->setValue(6);
-    secondsBox_->setFixedWidth(72);
-    durationRow->addWidget(secondsBox_);
-    durationRow->addWidget(new QLabel(QStringLiteral("秒")));
-    durationRow->addStretch();
-
-    layout->addSpacing(8);
-    layout->addLayout(durationRow);
 
     return group;
 }
@@ -202,7 +189,8 @@ QGroupBox *MainWindow::buildTunePanel()
     return group;
 }
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent)
+    : QMainWindow(parent),
+      AlgorithmRunning_(false)
 {
     setWindowTitle(QStringLiteral("轻擎机械臂运动控制台"));
     resize(1600, 900);
@@ -301,11 +289,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     connect(openBtn_, &QPushButton::clicked, this, &MainWindow::onOpenSerialClicked);
     connect(refreshBtn_, &QPushButton::clicked, this, &MainWindow::onRefreshDevicesClicked);
-    connect(setDurationBtn_, &QPushButton::clicked, this, &MainWindow::onSetDurationClicked);
     connect(enableBtn_, &QPushButton::clicked, this, &MainWindow::onEnableClicked);
     connect(disableBtn_, &QPushButton::clicked, this, &MainWindow::onDisableClicked);
     connect(cleartextBtn_, &QPushButton::clicked, this, &MainWindow::onCleartextDataClicked);
-    connect(initTrackBtn_, &QPushButton::clicked, this, &MainWindow::onInitTrackClicked);
     connect(teachBtn_, &QPushButton::clicked, this, &MainWindow::onTeachClicked);
     connect(runAlgoBtn_, &QPushButton::clicked, this, &MainWindow::onRunAlgoClicked);
     connect(clearDataBtn_, &QPushButton::clicked, this, &MainWindow::onClearDataClicked);
@@ -427,17 +413,6 @@ void MainWindow::onRefreshDevicesClicked()
     }
 }
 
-void MainWindow::onSetDurationClicked()
-{
-    const int sec = secondsBox_ ? secondsBox_->value() : 0;
-    controlParams_.trajectory.duration = sec;
-
-    if (robotController_) {
-        robotController_->setControlParams(controlParams_);
-    }
-
-    appendLog(QStringLiteral("总时长设置为 %1 秒").arg(sec));
-}
 
 void MainWindow::onJointStateUpdated(const JointState &state)
 {
@@ -607,13 +582,6 @@ void MainWindow::DisableMotor()
     }
 }
 
-void MainWindow::onInitTrackClicked()
-{
-    if(robotController_) {
-        robotController_->initTrajectoryTracking();
-    }
-}
-
 void MainWindow::onTeachClicked()
 {
     appendLog(QStringLiteral("示教模式（待实现）"));
@@ -621,10 +589,46 @@ void MainWindow::onTeachClicked()
 
 void MainWindow::onRunAlgoClicked()
 {
-    if(robotController_) {
-        robotController_->startControl();
-        appendLog(QStringLiteral("控制算法已启动"));
+    ControlAlgorithm controlAlg_ = ControlAlgorithm(Algswitch ? Algswitch->currentIndex() : 0);
+    if(!robotController_) 
+    {
+        appendLog(QStringLiteral("错误：控制器未初始化"));
+        return;
     }
+    robotController_->SwitchControlAlgorithm(controlAlg_);
+    
+    switch(controlAlg_) {
+        case ControlAlgorithm::GravityCompensation:
+            if(!AlgorithmRunning_)
+            {
+                robotController_->enableMotors(); // 启动算法前先使能电机，确保机械臂可以响应控制命令
+                this->runAlgoBtn_->setText(QStringLiteral("停止算法"));
+                robotController_->startControl();
+                appendLog(QStringLiteral("重力补偿算法已启动"));
+                AlgorithmRunning_ = true;
+            }
+            else
+            {
+                this->runAlgoBtn_->setText(QStringLiteral("运行算法"));
+                robotController_->stopControl();
+                appendLog(QStringLiteral("重力补偿算法已停止"));
+                //此时电机仍然使能，若要完全停止机械臂运动需要点击失能电机按钮，否则机械臂将保持最后接收到的力矩
+                //这里最好加一个位置控制命令将机械臂安全地移动到一个预设位置，然后再失能电机，这样可以避免机械臂保持在一个不安全的位置
+                robotController_->disableMotors();
+                AlgorithmRunning_ = false;
+            }
+            break;
+        case ControlAlgorithm::PlannedTrajectoryTracking:
+            appendLog(QStringLiteral("运行预定轨迹跟踪算法（待实现）"));
+            break;
+        case ControlAlgorithm::TeachingTrajectoryTracking:
+            appendLog(QStringLiteral("运行示教轨迹跟踪算法（待实现）"));
+            break;
+        default:
+            appendLog(QStringLiteral("未知算法选择"));
+            break;
+    }
+    return;
 }
 
 void MainWindow::onCleartextDataClicked()

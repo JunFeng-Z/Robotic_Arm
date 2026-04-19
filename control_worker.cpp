@@ -73,15 +73,16 @@ void ControlWorker::stop()
     }
 
     log("控制线程已停止");
+    std::cout << "控制线程已停止" << std::endl;
 }
 
 void ControlWorker::updateJointState(const JointState &state)
 {
     // 这里是否考虑加上时间戳，三个电机的时间戳应当匹配才能组合为一个状态
     std::lock_guard<std::mutex> locker(stateMutex_);
-    std::cout << "Received joint state: index=" << state.jointIndex
-              << ", pos=" << state.position << ", vel=" << state.velocity
-              << ", acc=" << state.acceleration << std::endl;
+    // std::cout << "Received joint state: index=" << state.jointIndex
+    //           << ", pos=" << state.position << ", vel=" << state.velocity
+    //           << ", acc=" << state.acceleration << std::endl;
     if (state.jointIndex >= 1 && state.jointIndex <= 3) {
         jointStates_[state.jointIndex] = state;
     }
@@ -135,9 +136,10 @@ void ControlWorker::controlLoop()
     try {
         auto nextWakeTime = std::chrono::steady_clock::now();
 
-        std::cout << running_.load() << std::endl;
+        //std::cout << running_.load() << std::endl;
         while (running_.load())
         {
+            //std::cout << running_.load() << std::endl;
             nextWakeTime += std::chrono::milliseconds(controlPeriodMs_);
 
             switch (currentAlgorithm_)
@@ -149,7 +151,7 @@ void ControlWorker::controlLoop()
                 }
                 break;
             }
-            case ControlAlgorithm::SlidingMode:
+            case ControlAlgorithm::PlannedTrajectoryTracking:
             {
                 float currentTime = getCurrentTime();
                 float elapsedTime = currentTime - startTime_;
@@ -169,7 +171,7 @@ void ControlWorker::controlLoop()
 
                 break;
             }
-            case ControlAlgorithm::PID:
+            case ControlAlgorithm::TeachingTrajectoryTracking:
             {
                 break;
             }
@@ -228,10 +230,10 @@ bool ControlWorker::gravityCompensation()
     Eigen::Vector3f tau = robotModel_->gravityCompensation(
         Eigen::Vector3f(currentStates[1].position, currentStates[2].position, currentStates[3].position)
     );
-    std::cout << "Joint positions: " << currentStates[1].position << ", "
-              << currentStates[2].position << ", " << currentStates[3].position << std::endl;
+    //std::cout << "Joint positions: " << currentStates[1].position << ", "
+    //          << currentStates[2].position << ", " << currentStates[3].position << std::endl;
     // 发送扭矩命令到电机
-    std::cout << "Gravity Compensation Torques: " << tau.transpose() << std::endl;
+    //std::cout << "Gravity Compensation Torques: " << tau.transpose() << std::endl;
     if (callbacks_.torqueCommand) {
         callbacks_.torqueCommand(1, tau[0]);
         callbacks_.torqueCommand(2, tau[1]);

@@ -210,12 +210,13 @@ void CanParserWorker::start()
         float pos = byt2Float(frame[8], frame[9],MotorField::Pos);
         float vel = byt2Float(frame[10], frame[11],MotorField::Vel);
 
+        //根据电机使能与否以及ID映射到对应的关节索引，11（使能，电机canid=1），01（失能，电机canid=1）
         int jointIndex = -1;
-        if (motorId == 17) {
+        if (motorId == 17 || motorId == 1) {
             jointIndex = 1;
-        } else if (motorId == 18) {
+        } else if (motorId == 18 || motorId == 2) {
             jointIndex = 2;
-        } else if (motorId == 19) {
+        } else if (motorId == 19 || motorId == 3) {
             jointIndex = 3;
             pos = -pos;
             vel = -vel;

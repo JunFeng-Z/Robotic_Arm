@@ -39,11 +39,9 @@ protected:
 private slots:
     void onOpenSerialClicked();
     void onRefreshDevicesClicked();
-    void onSetDurationClicked();
     void onEnableClicked();
     void onDisableClicked();
     void onJointStateUpdated(const JointState &state);
-    void onInitTrackClicked();
     void onTeachClicked();
     void onRunAlgoClicked();
     void onControlCommandSent(int jointIndex, float targetPos, float targetVel);
@@ -81,6 +79,7 @@ private:
     QComboBox *parityCombo_ = nullptr;
     QComboBox *dataBitsCombo_ = nullptr;
     QComboBox *timeoutCombo_ = nullptr;
+    QComboBox *Algswitch = nullptr;
 
     QPushButton *openBtn_ = nullptr;
     QPushButton *refreshBtn_ = nullptr;
@@ -88,14 +87,13 @@ private:
     QPushButton *disableBtn_ = nullptr;
     QPushButton *cleartextBtn_ = nullptr;
 
-    QPushButton *initTrackBtn_ = nullptr;
     QPushButton *teachBtn_ = nullptr;
     QPushButton *clearDataBtn_ = nullptr;
     QPushButton *pausePlotBtn_ = nullptr;
     QPushButton *resumePlotBtn_ = nullptr;
-    QPushButton *setDurationBtn_ = nullptr;
+
     QPushButton *runAlgoBtn_ = nullptr;
-    QSpinBox *secondsBox_ = nullptr;
+
 
     FIFO canRxFifo_{4096};
     FIFO uartRxFifo_{4096};
@@ -114,6 +112,8 @@ private:
     PlotWidget *plotWidgets_[4] = {nullptr, nullptr, nullptr, nullptr};
 
     ControlParams controlParams_;
+
+    bool AlgorithmRunning_;
 
 private:
     // 模拟数据生成
