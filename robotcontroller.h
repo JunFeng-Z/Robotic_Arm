@@ -2,10 +2,6 @@
 #define ROBOTCONTROLLER_H
 
 #include <QObject>
-#include <QThread>
-#include <QMutex>
-#include <QWaitCondition>
-#include <QAtomicInt>
 #include <QVector>
 #include <array>
 #include <memory>
@@ -19,92 +15,7 @@
 class SerialPort;
 
 
-/**
- * @brief 控制工作线程（独立线程执行控制算法）
- */
-class ControlWorker : public QObject
-{
-    Q_OBJECT
-
-public:
-    explicit ControlWorker(QObject *parent = nullptr);
-
-public slots:
-    void start();
-    void stop();
-    void updateJointState(const JointState &state);
-    void setControlParams(const ControlParams &params);
-    void initTrajectory();
-    void clearMoveIndex();
-    void SwitchControlAlgorithm(ControlAlgorithm algorithm);
-
-signals:
-    void controlCommandSent(int jointIndex, float targetPos, float targetVel);
-    void torqueCommandSent(int jointIndex, float torque);
-    void controlStatusChanged(bool running);
-    void logMessage(const QString &message);
-
-private:
-    void controlLoop();
-
-    bool computeJointStatesFromTrajectory(float t,Eigen::Vector3f& q,Eigen::Vector3f& qd,Eigen::Vector3f& qdd);
-
-        /**
-     * @brief 根据末端状态计算关节状态（角度、速度、加速度）
-     * @param position 末端位置 [x, y, z] (m)
-     * @param velocity 末端速度 [dx, dy, dz] (m/s)
-     * @param acceleration 末端加速度 [ddx, ddy, ddz] (m/s²)
-     * @param q 输出关节角度 [q1, q2, q3] (rad)
-     * @param qd 输出关节速度 [qd1, qd2, qd3] (rad/s)
-     * @param qdd 输出关节加速度 [qdd1, qdd2, qdd3] (rad/s²)
-     * @param elbow 肘部配置 (+1 或 -1)，默认-1
-     * @return 是否成功计算
-     */
-    bool computeInverseKinematicsFull(const Eigen::Vector3f& position,
-                                      const Eigen::Vector3f& velocity,
-                                      const Eigen::Vector3f& acceleration,
-                                      Eigen::Vector3f& q,
-                                      Eigen::Vector3f& qd,
-                                      Eigen::Vector3f& qdd,
-                                      int elbow = -1);
-
-    Eigen::Vector3f computeTorques(const Eigen::Vector3f& q,
-            const Eigen::Vector3f& qd,
-            const Eigen::Vector3f& qdd) ;
-    void GetReferenceTorques() ;
-    float getCurrentTime() const;
-    void updateModelFromParams();  // 根据params_更新模型和生成器
-    bool Slidingmode_controller(float t);
-
-    /**
-     * @brief 重力补偿控制算法实现
-      * @return 是否成功计算并发送重力补偿命令
-     */
-    bool GravityCompensation();
-
-private:
-    std::array<JointState, 4> jointStates_;  // 索引1-3对应关节1-3
-    mutable QMutex stateMutex_;  // 保护关节状态
-    ControlParams params_;
-    mutable QMutex paramsMutex_;  // 保护参数
-
-    // 机器人模型和轨迹生成器
-    std::unique_ptr<RobotModel> robotModel_;
-    std::unique_ptr<TrajectoryGenerator> trajectoryGenerator_;
-    mutable QMutex modelMutex_;  // 保护模型和生成器
-
-    std::atomic_bool running_{false};
-    std::atomic_bool trajectoryInitialized_{false};
-    float startTime_ = 0.0f;
-    int controlPeriodMs_ = 1;//单位毫秒
-
-    std::atomic_int moveIndex_{0};  // 预定义轨迹点的起始索引
-    std::vector<Eigen::Vector3f> torque_d;
-    std::vector<Eigen::Vector3f> q_d;
-    std::vector<Eigen::Vector3f> qd_d;
-    std::vector<Eigen::Vector3f> qdd_d;
-    ControlAlgorithm currentAlgorithm_;
-};
+#include "control_worker.h"
 
 /**
  * @brief 机器人控制器主类
@@ -272,8 +183,7 @@ private:
 
 private:
     SerialPort *serialPort_ = nullptr;
-    ControlWorker *worker_ = nullptr;
-    QThread *controlThread_ = nullptr;
+    std::unique_ptr<ControlWorker> worker_;
     std::atomic_bool controlRunning_{false};
     ControlAlgorithm currentAlgorithm_{ControlAlgorithm::GravityCompensation};
 };

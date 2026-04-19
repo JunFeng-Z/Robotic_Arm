@@ -60,7 +60,7 @@ void SerialRxWorker::start()
                 if (frameType != 0x11)
                 {
                     // 如果想调试可以打印
-                    emit logMessage("ACK filtered");
+                    //emit logMessage("ACK filtered");
                     continue;
                 }
                 QMutexLocker canLock(canMutex_);
@@ -204,7 +204,7 @@ void CanParserWorker::start()
             frameStr += QString("%1 ").arg(frame[i], 2, 16, QLatin1Char('0')).toUpper();
         }
 
-        emit logMessage(frameStr);
+        //emit logMessage(frameStr);
 
         const uint8_t motorId = frame[7];
         float pos = byt2Float(frame[8], frame[9],MotorField::Pos);

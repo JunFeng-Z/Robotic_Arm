@@ -1,353 +1,15 @@
 #include "robotcontroller.h"
 #include "SerialPort.h"
+#include "control_worker.h"
 
 #include <cmath>
-#include <QDateTime>
 #include <chrono>
 #include <thread>
 
-///////////////////////////// ControlWorker 实现 /////////////////////////////
-
-ControlWorker::ControlWorker(QObject *parent)
-    : QObject(parent)
-{
-    //params_构造时全部使用的默认值
-    // 创建默认的机器人模型和轨迹生成器
-    robotModel_ = std::make_unique<RobotModel>(params_.robotParams);
-    trajectoryGenerator_ = std::make_unique<TrajectoryGenerator>(params_.trajectory);
-    GetReferenceTorques() ;
-
-}
-
-void ControlWorker::start()
-{
-    if (running_.load()) {
-        emit logMessage(QStringLiteral("控制线程已在运行"));
-        return;
-    }
-
-    running_.store(true);
-    startTime_ = getCurrentTime();
-
-    emit logMessage(QStringLiteral("控制线程已启动，周期: %1ms").arg(controlPeriodMs_));
-
-    // 执行控制循环
-    controlLoop();
-
-    emit logMessage(QStringLiteral("控制线程已停止"));
-}
-
-void ControlWorker::stop()
-{
-    running_.store(false);
-}
-
-void ControlWorker::updateJointState(const JointState &state)
-{
-    //这里是否考虑加上时间辍，三个电机的时间辍应当匹配才能组合为一个状态
-    QMutexLocker locker(&stateMutex_);
-    std::cout<<"Received joint state: index=" << state.jointIndex << ", pos=" << state.position << ", vel=" << state.velocity << ", acc=" << state.acceleration << std::endl;
-    if (state.jointIndex >= 1 && state.jointIndex <= 3) {
-        jointStates_[state.jointIndex] = state;
-    }
-}
-
-void ControlWorker::setControlParams(const ControlParams &params)
-{
-    QMutexLocker locker(&paramsMutex_);
-    params_ = params;
-    controlPeriodMs_ = params.controlPeriod;
-
-    // 更新模型和生成器
-    updateModelFromParams();
-}
-
-void ControlWorker::initTrajectory()
-{
-    trajectoryInitialized_.store(true);
-    startTime_ = getCurrentTime();
-    emit logMessage(QStringLiteral("轨迹跟踪已初始化"));
-}
-
-void ControlWorker::updateModelFromParams()
-{
-    QMutexLocker locker(&modelMutex_);
-
-    if (robotModel_) {
-        robotModel_->setParameters(params_.robotParams);
-    }
-
-    if (trajectoryGenerator_) {
-        trajectoryGenerator_->setParameters(params_.trajectory);
-    }
-}
-//控制循环函数，持续计算控制命令并发送
-void ControlWorker::controlLoop()
-{
-    try {
-        auto nextWakeTime = std::chrono::steady_clock::now();
-
-        std::cout<<running_.load()<<std::endl;
-        while (running_.load()) 
-        {
-            nextWakeTime += std::chrono::milliseconds(controlPeriodMs_);
-
-            switch (currentAlgorithm_) 
-            {
-            case ControlAlgorithm::GravityCompensation: 
-            {
-                if (!GravityCompensation()) {
-                    throw std::runtime_error("Failed to compute control command using gravity compensation");
-                }
-                break;
-            }
-            case ControlAlgorithm::SlidingMode: 
-            {
-                float currentTime = getCurrentTime();
-                float elapsedTime = currentTime - startTime_;
-
-                {
-                    QMutexLocker locker(&paramsMutex_);
-                    if (elapsedTime > params_.trajectory.duration) {
-                        emit logMessage(QStringLiteral("轨迹跟踪已完成，时长: %1秒")
-                                            .arg(elapsedTime, 0, 'f', 2));
-                        running_.store(false);
-                        break;
-                    }
-                }
-
-                if (!Slidingmode_controller(elapsedTime)) {
-                    throw std::runtime_error("Failed to compute control command using sliding mode controller");
-                }
-
-                break;
-            }
-            case ControlAlgorithm::PID: 
-            {
-                break;
-            }
-            default:
-            {
-                break;
-            }
-            }
-
-            std::this_thread::sleep_until(nextWakeTime);
-        }
-    } catch (const std::exception& e) {
-        emit logMessage(QStringLiteral("控制线程异常: %1").arg(e.what()));
-        running_.store(false);
-    }
-
-    emit controlStatusChanged(false);
-}
-
-void ControlWorker::GetReferenceTorques() 
-{
-    torque_d.clear();
-    q_d.clear();
-    qd_d.clear();
-    qdd_d.clear();
-    int numPoints = params_.trajectory.duration * 1000 / controlPeriodMs_;
-    for(int i=0;i<numPoints;i++)
-    {
-        float t = i * controlPeriodMs_ / 1000.0f;
-        Eigen::Vector3f q, qd, qdd;
-        Eigen::Vector3f tau;
-        bool success = this->computeJointStatesFromTrajectory(t, q, qd, qdd);
-        if (!success) 
-        {
-            emit logMessage(QStringLiteral("时间 t=%1 时计算失败").arg(t, 0, 'f', 3));
-            throw std::runtime_error("Failed to compute joint states from trajectory");
-        }
-        tau = this->computeTorques(q, qd, qdd);
-        torque_d.push_back(tau);
-        q_d.push_back(q);
-        qd_d.push_back(qd);
-        qdd_d.push_back(qdd);
-    }
-}
-
-void ControlWorker::SwitchControlAlgorithm(ControlAlgorithm algorithm)
-{
-    currentAlgorithm_ = algorithm;
-    emit logMessage(QStringLiteral("控制算法已切换"));
-}
-
-bool ControlWorker::GravityCompensation()
-{
-    //emit logMessage(QStringLiteral("执行重力补偿控制算法"));
-    // 获取当前关节状态
-    std::array<JointState, 4> currentStates;
-    {
-        QMutexLocker locker(&stateMutex_);
-        currentStates = jointStates_;
-    }
-    Eigen::Vector3f tau = robotModel_->gravityCompensation(
-        Eigen::Vector3f(currentStates[1].position, currentStates[2].position, currentStates[3].position)
-    );
-    std::cout<<"Joint positions: " << currentStates[1].position << ", " << currentStates[2].position << ", " << currentStates[3].position << std::endl;
-    // 发送扭矩命令到电机
-    std::cout << "Gravity Compensation Torques: " << tau.transpose() << std::endl;
-    emit torqueCommandSent(1, tau[0]);
-    emit torqueCommandSent(2, tau[1]);
-    emit torqueCommandSent(3, tau[2]);
-    return true;
-}
-
-bool ControlWorker::Slidingmode_controller(float t)
-{
-    // 获取时间索引
-    int index = static_cast<int>(t * 1000 / controlPeriodMs_);
-
-    // 检查索引是否在预定义轨迹范围内
-    if (index >= torque_d.size()) {
-        emit logMessage(QStringLiteral("时间 t=%1 超出预定义轨迹范围").arg(t, 0, 'f', 3));
-        return false;
-    }
-
-
-    // 获取期望关节状态（从预定义轨迹）
-    Eigen::Vector3f q_desired = q_d[index];
-    Eigen::Vector3f qd_desired = qd_d[index];
-    Eigen::Vector3f qdd_desired = qdd_d[index];
-
-    // 获取当前关节状态
-    std::array<JointState, 4> currentStates;
-    {
-        QMutexLocker locker(&stateMutex_);
-        currentStates = jointStates_;
-    }
-
-    // 提取当前关节状态到Eigen向量
-    Eigen::Vector3f q_current, qd_current, qdd_current;
-    q_current << currentStates[1].position, currentStates[2].position, currentStates[3].position;
-    qd_current << currentStates[1].velocity, currentStates[2].velocity, currentStates[3].velocity;
-    qdd_current << currentStates[1].acceleration, currentStates[2].acceleration, currentStates[3].acceleration;
-
-    // 计算误差
-    Eigen::Vector3f e = q_desired - q_current;
-    Eigen::Vector3f de = qd_desired - qd_current;
-
-    // 计算滑模面
-    Eigen::Vector3f s = de + params_.K.cwiseProduct(e);
-
-    // 计算切换函数
-    Eigen::Vector3f Yd;
-    Yd[0] = (54.0f + params_.sliding_a1) * std::tanh(s[0] / 3.0f);
-    Yd[1] = (50.0f + params_.sliding_a2) * std::tanh(s[1]);
-    // 符号函数实现
-    Yd[2] = (110.0f + params_.sliding_b1) * ((s[2] > 0) ? 1.0f : ((s[2] < 0) ? -1.0f : 0.0f));
-
-    // 计算控制量（期望加速度 + 补偿）
-    Eigen::Vector3f V = qdd_desired + params_.K.cwiseProduct(de) + Yd;
-
-    // 估计扭矩（通过逆向动力学）
-    Eigen::Vector3f estimateT;
-    {
-        QMutexLocker locker(&modelMutex_);
-        estimateT = robotModel_->inverseDynamicsL(q_current, qd_current, V);
-    }
-
-    // 获取参考扭矩
-    Eigen::Vector3f referenceT = torque_d[index];
-
-    // 计算控制扭矩并进行限幅
-    Eigen::Vector3f ControlT = estimateT;
-
-    // 关节扭矩限幅
-    for (int i = 0; i < 3; ++i) {
-        float upper_limit = referenceT[i] + params_.detlta[i];
-        float lower_limit = referenceT[i] - params_.detlta[i];
-
-        if (ControlT[i] > upper_limit) ControlT[i] = upper_limit;
-        if (ControlT[i] < lower_limit) ControlT[i] = lower_limit;
-    }
-
-    // 发送扭矩命令到电机
-    emit torqueCommandSent(1, ControlT[0]);
-    emit torqueCommandSent(2, ControlT[1]);
-    emit torqueCommandSent(3, ControlT[2]);
-    return true;
-}
-
-Eigen::Vector3f ControlWorker::computeTorques(const Eigen::Vector3f& q,
-                                                    const Eigen::Vector3f& qd,
-                                                    const Eigen::Vector3f& qdd) {
-    // 直接调用机器人的逆向动力学计算
-    Eigen::Vector3f tau = robotModel_->inverseDynamics(q, qd, qdd);
-    return tau;
-}
-
-bool ControlWorker::computeJointStatesFromTrajectory(float t,
-                                                           Eigen::Vector3f& q,
-                                                           Eigen::Vector3f& qd,
-                                                           Eigen::Vector3f& qdd)
-{
-    // 1. 生成轨迹点
-    TrajectoryPoint point = trajectoryGenerator_->generatePoint(t);
-
-    // 2. 使用完整的逆运动学计算关节状态
-    return computeInverseKinematicsFull(point.position, point.velocity, point.acceleration,
-                                        q, qd, qdd);
-}
-
-bool ControlWorker::computeInverseKinematicsFull(const Eigen::Vector3f& position,
-                                                       const Eigen::Vector3f& velocity,
-                                                       const Eigen::Vector3f& acceleration,
-                                                       Eigen::Vector3f& q,
-                                                       Eigen::Vector3f& qd,
-                                                       Eigen::Vector3f& qdd,
-                                                       int elbow)
-{
-    // 步骤1: 逆运动学计算关节角度
-    if (!robotModel_->inverseKinematics(position, q, elbow)) {
-        return false;
-    }
-
-    // 步骤2: 计算雅可比矩阵
-    Eigen::Matrix3f J = robotModel_->computeJacobian(q);
-
-    // 步骤3: 逆速度计算 (使用QR分解，参考Matlab代码)
-    if (!robotModel_->inverseVelocityQR(J, velocity, qd)) {
-        // 如果QR分解失败，尝试其他方法
-        if (!robotModel_->inverseVelocity(J, velocity, qd)) {
-            return false;
-        }
-    }
-
-    // 步骤4: 计算雅可比矩阵导数
-    Eigen::Matrix3f dJ = robotModel_->computeJacobianDerivative(q, qd);
-
-    // 步骤5: 逆加速度计算 (使用QR分解，参考Matlab代码)
-    if (!robotModel_->inverseAccelerationQR(q, qd, acceleration, qdd)) {
-        // 如果QR分解失败，尝试其他方法
-        if (!robotModel_->inverseAcceleration(q, qd, acceleration, qdd)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-
-
-
-
-//界面按钮清除数据时调用，UI图清除，这里重置预定轨迹的起始运行索引
-void ControlWorker::clearMoveIndex()
-{
-    moveIndex_.store(0);
-    emit logMessage(QStringLiteral("预定轨迹索引已重置"));
-}
-
-
-
-
-
-float ControlWorker::getCurrentTime() const
-{
-    return static_cast<float>(QDateTime::currentMSecsSinceEpoch()) / 1000.0f;
+// 辅助函数：获取当前时间（毫秒）
+static uint64_t currentMillis() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
 }
 
 ///////////////////////////// RobotController 实现 /////////////////////////////
@@ -355,50 +17,48 @@ float ControlWorker::getCurrentTime() const
 RobotController::RobotController(QObject *parent)
     : QObject(parent)
 {
-    // 创建控制线程和工作对象
-    controlThread_ = new QThread(this);
-    worker_ = new ControlWorker();
+    // 设置ControlWorker的回调函数
+    ControlWorker::Callbacks callbacks;
+    callbacks.log = [this](const std::string& message) {
+        emit logMessage(QString::fromStdString(message));
+    };
+    callbacks.torqueCommand = [this](int jointIndex, float torque) {
+        // 直接调用槽函数，确保在正确的线程中执行
+        QMetaObject::invokeMethod(this, "onTorqueCommandSent",
+                                 Qt::QueuedConnection,
+                                 Q_ARG(int, jointIndex),
+                                 Q_ARG(float, torque));
+    };
+    callbacks.controlCommand = [this](int jointIndex, float targetPos, float targetVel) {
+        // 直接调用槽函数
+        QMetaObject::invokeMethod(this, "onControlCommandSent",
+                                 Qt::QueuedConnection,
+                                 Q_ARG(int, jointIndex),
+                                 Q_ARG(float, targetPos),
+                                 Q_ARG(float, targetVel));
+    };
+    callbacks.controlStatus = [this](bool running) {
+        emit controlStatusChanged(running);
+    };
 
-    // 将工作对象移到控制线程
-    worker_->moveToThread(controlThread_);
+    // 创建控制工作对象
+    worker_ = std::make_unique<ControlWorker>(callbacks);
 
-    // 连接信号槽
-    connect(worker_, &ControlWorker::controlCommandSent,
-            this, &RobotController::onControlCommandSent);
-    connect(worker_, &ControlWorker::torqueCommandSent,
-            this, &RobotController::onTorqueCommandSent);
-    connect(worker_, &ControlWorker::controlStatusChanged,
-            this, &RobotController::controlStatusChanged);
-    connect(worker_, &ControlWorker::logMessage,
-            this, &RobotController::logMessage);
-
-    // 启动线程循环，等待调用startControl()后才执行控制循环
-    controlThread_->start();
-    SwitchControlAlgorithm(ControlAlgorithm::GravityCompensation);  // 默认使用重力补偿算法
+    // 默认使用重力补偿算法
+    SwitchControlAlgorithm(ControlAlgorithm::GravityCompensation);
 }
 
 RobotController::~RobotController()
 {
     stopControl();
-
-    if (worker_) {
-        worker_->stop();
-        delete worker_;
-        worker_ = nullptr;
-    }
-
-    if (controlThread_) {
-        controlThread_->quit();
-        controlThread_->wait();
-        delete controlThread_;
-        controlThread_ = nullptr;
-    }
+    // worker_的析构函数会自动停止线程并等待
 }
 
 void RobotController::setSerialPort(SerialPort *serialPort)
 {
     serialPort_ = serialPort;
 }
+
 //拿到底层通信线程解析出的关节状态，转发到工作线程，并发送状态到界面显示
 void RobotController::updateJointState(int jointIndex, float position, float velocity)
 {
@@ -406,23 +66,20 @@ void RobotController::updateJointState(int jointIndex, float position, float vel
         return;
     }
 
-    JointState state(jointIndex, position, velocity,0, getCurrentTime());
+    JointState state(jointIndex, position, velocity, 0, getCurrentTime());
 
-    // 转发到工作线程
-    QMetaObject::invokeMethod(worker_, "updateJointState",
-                             Qt::QueuedConnection,
-                             Q_ARG(JointState, state));
+    // 转发到工作线程（线程安全）
+    worker_->updateJointState(state);
 
     // 同时发送状态更新信号
     emit jointStateChanged(state);
 }
+
 void RobotController::SwitchControlAlgorithm(ControlAlgorithm algorithm)
 {
     currentAlgorithm_ = algorithm;
     if (worker_) {
-        QMetaObject::invokeMethod(worker_, "SwitchControlAlgorithm",
-                                 Qt::QueuedConnection,
-                                 Q_ARG(ControlAlgorithm, algorithm));
+        worker_->switchControlAlgorithm(algorithm);
     }
     else
     {
@@ -443,16 +100,13 @@ void RobotController::startControl()
     }
 
     controlRunning_.store(true);
-
-    // 启动工作线程的控制循环
-    QMetaObject::invokeMethod(worker_, "start", Qt::QueuedConnection);
+    worker_->start();
 }
 
 void RobotController::clearMoveIndex()
 {
-
     if (worker_) {
-        QMetaObject::invokeMethod(worker_, "clearMoveIndex", Qt::QueuedConnection);
+        worker_->clearMoveIndex();
     }
 }
 
@@ -471,11 +125,9 @@ void RobotController::stopControl()
 
 void RobotController::setControlParams(const ControlParams &params)
 {
-    // if (worker_) {
-    //     QMetaObject::invokeMethod(worker_, "setControlParams",
-    //                              Qt::QueuedConnection,
-    //                              Q_ARG(ControlParams, params));
-    // }
+    if (worker_) {
+        worker_->setControlParams(params);
+    }
 
     emit logMessage(QStringLiteral("控制参数已更新"));
 }
@@ -491,7 +143,7 @@ ControlParams RobotController::getControlParams() const
 void RobotController::initTrajectoryTracking()
 {
     if (worker_) {
-        QMetaObject::invokeMethod(worker_, "initTrajectory", Qt::QueuedConnection);
+        worker_->initTrajectory();
     }
 }
 
@@ -597,7 +249,7 @@ void RobotController::onControlCommandSent(int jointIndex, float targetPos, floa
 
 float RobotController::getCurrentTime() const
 {
-    return static_cast<float>(QDateTime::currentMSecsSinceEpoch()) / 1000.0f;
+    return static_cast<float>(currentMillis()) / 1000.0f;
 }
 
 uint16_t RobotController::floatToUint(float x, float x_min, float x_max, uint8_t bits) const
@@ -698,4 +350,3 @@ std::array<uint8_t, 30> RobotController::buildCommandFrame(uint8_t motorId, cons
     memcpy(byteArray.data(), &frame, sizeof(frame));
     return byteArray;
 }
-

@@ -41,7 +41,7 @@ else()
             damiao.h
             SerialPort.h
             serialcanworkers.h serialcanworkers.cpp
-            robotcontroller.h robotcontroller.cpp
+            robotcontroller.h robotcontroller.cpp control_worker.h control_worker.cpp
             robot_common.h
             robot_model.h robot_model.cpp
             trajectory_generator.h trajectory_generator.cpp

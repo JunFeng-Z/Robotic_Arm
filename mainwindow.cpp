@@ -442,10 +442,10 @@ void MainWindow::onSetDurationClicked()
 void MainWindow::onJointStateUpdated(const JointState &state)
 {
     // 更新日志
-    appendLog(QStringLiteral("关节%1: Pos=%2 Vel=%3")
-                  .arg(state.jointIndex)
-                  .arg(state.position, 0, 'f', 3)
-                  .arg(state.velocity, 0, 'f', 3));
+    // appendLog(QStringLiteral("关节%1: Pos=%2 Vel=%3")
+    //               .arg(state.jointIndex)
+    //               .arg(state.position, 0, 'f', 3)
+    //               .arg(state.velocity, 0, 'f', 3));
 
     // 更新绘图
     if (plotWidgets_[0] && state.jointIndex >= 1 && state.jointIndex <= 3) {
