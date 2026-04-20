@@ -9,10 +9,12 @@
 #include <condition_variable>
 #include <functional>
 #include <vector>
+#include <fstream>
 
 #include "robot_common.h"
 #include "robot_model.h"
 #include "trajectory_generator.h"
+#include "joint_trajectory_planner.h"
 
 /**
  * @brief 控制工作线程（独立线程执行控制算法）
@@ -51,6 +53,14 @@ public:
     void clearMoveIndex();
     void switchControlAlgorithm(ControlAlgorithm algorithm);
 
+    /**
+     * @brief 设置目标关节角度并规划轨迹
+     * @param targetAngles 目标关节角度 [q1, q2, q3] (rad)
+     * @param duration 轨迹持续时间 (秒)
+     * @return true 如果轨迹规划成功
+     */
+    bool setTargetJointAngles(const Eigen::Vector3f& targetAngles, float duration);
+
     // 获取当前控制算法
     ControlAlgorithm currentAlgorithm() const { return currentAlgorithm_; }
 
@@ -74,14 +84,26 @@ private:
                                    const Eigen::Vector3f& qd,
                                    const Eigen::Vector3f& qdd);
     void getReferenceTorques();
-    float getCurrentTime() const;
+    double getCurrentTime() const;
     void updateModelFromParams();
+
+    /**
+     * @brief 规划关节轨迹（基于当前关节位置和目标角度）
+     * @param targetAngles 目标关节角度
+     * @param duration 轨迹持续时间
+     * @return true 如果规划成功
+     */
+    bool planJointTrajectory(const Eigen::Vector3f& targetAngles, float duration);
     bool slidingModeController(float t);
     bool gravityCompensation();
+    bool jointPositionControl(float t);
 
     // 辅助函数：记录日志（线程安全通过回调）
     void log(const std::string& message);
     void log(const char* format, ...);
+
+    // 记录文件初始化
+    void initLogFile();
 
     // 回调函数
     Callbacks callbacks_;
@@ -99,7 +121,8 @@ private:
 
     std::atomic_bool running_{false};
     std::atomic_bool trajectoryInitialized_{false};
-    float startTime_ = 0.0f;
+    std::atomic_bool jointTrajectoryPlanned_{false};  // 关节轨迹是否已规划
+    double startTime_ = 0.0f;
     int controlPeriodMs_ = 1; // 单位毫秒
 
     std::atomic_int moveIndex_{0};  // 预定义轨迹点的起始索引
@@ -109,8 +132,18 @@ private:
     std::vector<Eigen::Vector3f> qdd_d;
     ControlAlgorithm currentAlgorithm_;
 
+    // 记录文件
+    std::ofstream logFile_;
+    std::string logFileName_;
+
+    // 关节轨迹规划器
+    std::unique_ptr<JointTrajectoryPlanner> jointTrajectoryPlanner_;
+    mutable std::mutex jointTrajectoryMutex_;  // 保护关节轨迹规划器
+
     // 线程管理
     std::thread workerThread_;
+
+    ControlAlgorithm lastAlgorithm_ = ControlAlgorithm::None;
 };
 
 #endif // CONTROL_WORKER_H

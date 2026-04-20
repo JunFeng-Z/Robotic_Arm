@@ -7,7 +7,8 @@
 #include <QMainWindow>
 #include <QMutex>
 #include <QWaitCondition>
-
+#include <QDoubleSpinBox>
+#include <QLabel>
 // 前向声明
 class JointState;
 
@@ -52,6 +53,10 @@ private slots:
     void onPausePlotClicked();
     void onResumePlotClicked();
 
+    void onGoHomePositionClicked();
+    void onGoStopPositionClicked();
+    void onGoNextPositionClicked();
+
 private:
     QGroupBox *buildConnectionPanel();
     QGroupBox *buildRunPanel();
@@ -93,6 +98,17 @@ private:
     QPushButton *resumePlotBtn_ = nullptr;
 
     QPushButton *runAlgoBtn_ = nullptr;
+    QPushButton *Gohome_positionBtn = nullptr;
+    QPushButton *Gostop_positionBtn = nullptr;
+    QPushButton *Gonext_positionBtn = nullptr;
+
+    QDoubleSpinBox *joint1Spin_ = nullptr;
+    QDoubleSpinBox *joint2Spin_ = nullptr;
+    QDoubleSpinBox *joint3Spin_ = nullptr;
+
+    QLabel *joint1Display_ = nullptr;
+    QLabel *joint2Display_ = nullptr;
+    QLabel *joint3Display_ = nullptr;
 
 
     FIFO canRxFifo_{4096};

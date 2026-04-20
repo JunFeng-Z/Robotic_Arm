@@ -95,6 +95,16 @@ public:
      */
     void SwitchControlAlgorithm(ControlAlgorithm algorithm);
 
+    /**
+     * @brief 设置目标关节角度并启动关节位置控制
+     * @param joint1Angle 关节1目标角度 (rad)
+     * @param joint2Angle 关节2目标角度 (rad)
+     * @param joint3Angle 关节3目标角度 (rad)
+     * @param duration 轨迹持续时间 (秒)
+     * @return true 如果设置成功
+     */
+    bool setTargetJointAngles(float joint1Angle, float joint2Angle, float joint3Angle, float duration);
+
 signals:
     /**
      * @brief 关节状态更新信号

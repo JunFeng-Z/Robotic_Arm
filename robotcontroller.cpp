@@ -5,7 +5,7 @@
 #include <cmath>
 #include <chrono>
 #include <thread>
-
+#include <QtMath>
 // 辅助函数：获取当前时间（毫秒）
 static uint64_t currentMillis() {
     using namespace std::chrono;
@@ -349,4 +349,30 @@ std::array<uint8_t, 30> RobotController::buildCommandFrame(uint8_t motorId, cons
     std::array<uint8_t, 30> byteArray;
     memcpy(byteArray.data(), &frame, sizeof(frame));
     return byteArray;
+}
+
+bool RobotController::setTargetJointAngles(float joint1Angle, float joint2Angle, float joint3Angle, float duration)
+{
+    if (!worker_) {
+        emit logMessage(QStringLiteral("错误：控制工作对象未初始化"));
+        return false;
+    }
+
+    if (duration <= 0.0f) {
+        emit logMessage(QStringLiteral("错误：轨迹持续时间必须为正数"));
+        return false;
+    }
+
+    Eigen::Vector3f targetAngles(qDegreesToRadians(joint1Angle), qDegreesToRadians(joint2Angle), qDegreesToRadians(joint3Angle));
+
+    bool success = worker_->setTargetJointAngles(targetAngles, duration);
+
+    if (success) {
+        emit logMessage(QString::asprintf("关节位置控制已设置：目标角度=[%.3f, %.3f, %.3f] rad，持续时间=%.2f s",
+                                          joint1Angle, joint2Angle, joint3Angle, duration));
+    } else {
+        emit logMessage(QStringLiteral("错误：设置关节位置控制失败"));
+    }
+
+    return success;
 }

@@ -5,6 +5,10 @@
 #include <cstdarg>
 #include <cstdio>
 #include <iostream>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
+#include <filesystem>
 
 // 辅助函数：获取当前时间（毫秒）
 static uint64_t currentMillis() {
@@ -13,18 +17,22 @@ static uint64_t currentMillis() {
 }
 
 ControlWorker::ControlWorker(const Callbacks& callbacks)
-    : callbacks_(callbacks)
+    : callbacks_(callbacks), logFileName_("")
 {
     // params_构造时全部使用的默认值
     // 创建默认的机器人模型和轨迹生成器
     robotModel_ = std::make_unique<RobotModel>(params_.robotParams);
     trajectoryGenerator_ = std::make_unique<TrajectoryGenerator>(params_.trajectory);
+    jointTrajectoryPlanner_ = std::make_unique<JointTrajectoryPlanner>();
     getReferenceTorques();
 }
 
 ControlWorker::~ControlWorker()
 {
     stop();
+    if (logFile_.is_open()) {
+        logFile_.close();
+    }
 }
 
 void ControlWorker::log(const std::string& message)
@@ -44,6 +52,32 @@ void ControlWorker::log(const char* format, ...)
     log(std::string(buffer));
 }
 
+void ControlWorker::initLogFile()
+{
+    // 固定文件名
+    logFileName_ = "control_log.txt";
+
+    // 检查文件是否存在，存在则删除
+    if (std::filesystem::exists(logFileName_)) {
+        std::filesystem::remove(logFileName_);
+    }
+
+    // 打开文件进行写入
+    logFile_.open(logFileName_, std::ios::out);
+    if (!logFile_.is_open()) {
+        log("无法打开记录文件: %s", logFileName_.c_str());
+        return;
+    }
+
+    // 写入标题行
+    logFile_ << "time,"
+             << "q1,q2,q3," << "qd1,qd2,qd3," << "qdd1,qdd2,qdd3,"
+             << "q_des1,q_des2,q_des3," << "qd_des1,qd_des2,qd_des3," << "qdd_des1,qdd_des2,qdd_des3,"
+             << "ref_tau1,ref_tau2,ref_tau3," << "control_tau1,control_tau2,control_tau3," << "final_tau1,final_tau2,final_tau3" << std::endl;
+
+    log("记录文件已创建: %s", logFileName_.c_str());
+}
+
 void ControlWorker::start()
 {
     if (running_.load()) {
@@ -53,6 +87,9 @@ void ControlWorker::start()
 
     running_.store(true);
     startTime_ = getCurrentTime();
+
+    // 初始化记录文件
+    initLogFile();
 
     log("控制线程已启动，周期: %dms", controlPeriodMs_);
 
@@ -73,16 +110,21 @@ void ControlWorker::stop()
     }
 
     log("控制线程已停止");
-    std::cout << "控制线程已停止" << std::endl;
+    //std::cout << "控制线程已停止" << std::endl;
 }
 
 void ControlWorker::updateJointState(const JointState &state)
 {
     // 这里是否考虑加上时间戳，三个电机的时间戳应当匹配才能组合为一个状态
     std::lock_guard<std::mutex> locker(stateMutex_);
-    // std::cout << "Received joint state: index=" << state.jointIndex
-    //           << ", pos=" << state.position << ", vel=" << state.velocity
-    //           << ", acc=" << state.acceleration << std::endl;
+    static bool firstUpdate = true;
+    if (firstUpdate) {
+        std::cout << "Received joint state: index=" << state.jointIndex
+                    << ", pos=" << state.position << ", vel=" << state.velocity
+                    << ", acc=" << state.acceleration << std::endl;
+        firstUpdate = false;
+    }
+
     if (state.jointIndex >= 1 && state.jointIndex <= 3) {
         jointStates_[state.jointIndex] = state;
     }
@@ -153,6 +195,10 @@ void ControlWorker::controlLoop()
             }
             case ControlAlgorithm::PlannedTrajectoryTracking:
             {
+                if(lastAlgorithm_ != ControlAlgorithm::PlannedTrajectoryTracking) {
+                    startTime_ = getCurrentTime(); // 切换到预定轨迹跟踪控制时重置开始时间
+                    lastAlgorithm_ = ControlAlgorithm::PlannedTrajectoryTracking;
+                }
                 float currentTime = getCurrentTime();
                 float elapsedTime = currentTime - startTime_;
 
@@ -175,8 +221,23 @@ void ControlWorker::controlLoop()
             {
                 break;
             }
+            case ControlAlgorithm::JointPositionControl:
+            {
+                if(lastAlgorithm_ != ControlAlgorithm::JointPositionControl) {
+                    startTime_ = getCurrentTime(); // 切换到关节位置控制时重置开始时间
+                    lastAlgorithm_ = ControlAlgorithm::JointPositionControl;
+                }
+                double currentTime = getCurrentTime();
+                double elapsedTime = currentTime - startTime_;
+                //std::cout << "Elapsed time: " << elapsedTime << std::endl;
+                if (!jointPositionControl(elapsedTime)) {
+                    throw std::runtime_error("Failed to compute control command using joint position control");
+                }
+                break;
+            }
             default:
             {
+                log("警告：未知的控制算法");
                 break;
             }
             }
@@ -278,12 +339,14 @@ bool ControlWorker::slidingModeController(float t)
     // 计算滑模面
     Eigen::Vector3f s = de + params_.K.cwiseProduct(e);
 
-    // 计算切换函数
+    const float phi1 = 0.05f;
+    const float phi2 = 0.05f;
+    const float phi3 = 0.05f;
+
     Eigen::Vector3f Yd;
-    Yd[0] = (54.0f + params_.sliding_a1) * std::tanh(s[0] / 3.0f);
-    Yd[1] = (50.0f + params_.sliding_a2) * std::tanh(s[1]);
-    // 符号函数实现
-    Yd[2] = (110.0f + params_.sliding_b1) * ((s[2] > 0) ? 1.0f : ((s[2] < 0) ? -1.0f : 0.0f));
+    Yd[0] = params_.sliding_Yd1 * std::tanh(s[0] / phi1);
+    Yd[1] = params_.sliding_Yd2 * std::tanh(s[1] / phi2);
+    Yd[2] = params_.sliding_Yd3 * std::tanh(s[2] / phi3);
 
     // 计算控制量（期望加速度 + 补偿）
     Eigen::Vector3f V = qdd_desired + params_.K.cwiseProduct(de) + Yd;
@@ -309,13 +372,33 @@ bool ControlWorker::slidingModeController(float t)
         if (ControlT[i] > upper_limit) ControlT[i] = upper_limit;
         if (ControlT[i] < lower_limit) ControlT[i] = lower_limit;
     }
-
+    
     // 发送扭矩命令到电机
     if (callbacks_.torqueCommand) {
         callbacks_.torqueCommand(1, ControlT[0]);
         callbacks_.torqueCommand(2, ControlT[1]);
         callbacks_.torqueCommand(3, ControlT[2]);
     }
+
+    // 记录数据
+    if (logFile_.is_open()) {
+        float currentTime = getCurrentTime();
+        logFile_ << std::fixed << std::setprecision(6)
+                 << t << ","
+                 << q_current[0] << "," << q_current[1] << "," << q_current[2] << ","
+                 << qd_current[0] << "," << qd_current[1] << "," << qd_current[2] << ","
+                 << qdd_current[0] << "," << qdd_current[1] << "," << qdd_current[2] << ","
+                 << q_desired[0] << "," << q_desired[1] << "," << q_desired[2] << ","
+                 << qd_desired[0] << "," << qd_desired[1] << "," << qd_desired[2] << ","
+                 << qdd_desired[0] << "," << qdd_desired[1] << "," << qdd_desired[2] << ","
+                 << referenceT[0] << "," << referenceT[1] << "," << referenceT[2] << ","
+                 << estimateT[0] << "," << estimateT[1] << "," << estimateT[2] << ","
+                 << ControlT[0] << "," << ControlT[1] << "," << ControlT[2] <<","
+                 << e[0] << "," << e[1] << "," << e[2] << ","
+                 << V[0] << "," << V[1] << "," << V[2] << ","
+                 << de[0] << "," << de[1] << "," << de[2] << std::endl;
+    }
+
     return true;
 }
 
@@ -378,7 +461,103 @@ bool ControlWorker::computeInverseKinematicsFull(const Eigen::Vector3f& position
     return true;
 }
 
-float ControlWorker::getCurrentTime() const
+double ControlWorker::getCurrentTime() const
 {
-    return static_cast<float>(currentMillis()) / 1000.0f;
+    return static_cast<double>(currentMillis()) / 1000.0;
+}
+
+bool ControlWorker::setTargetJointAngles(const Eigen::Vector3f& targetAngles, float duration)
+{
+    if (duration <= 0.0f) {
+        log("错误：轨迹持续时间必须为正数");
+        return false;
+    }
+
+    // 切换到关节位置控制算法
+    switchControlAlgorithm(ControlAlgorithm::JointPositionControl);
+
+    // 规划轨迹
+    if (!planJointTrajectory(targetAngles, duration)) {
+        log("错误：规划关节轨迹失败");
+        return false;
+    }
+
+    jointTrajectoryPlanned_.store(true);
+
+    log("关节位置控制已设置：目标角度=[%.3f, %.3f, %.3f] rad，持续时间=%.2f s",
+        targetAngles[0], targetAngles[1], targetAngles[2], duration);
+
+    return true;
+}
+
+bool ControlWorker::planJointTrajectory(const Eigen::Vector3f& targetAngles, float duration)
+{ 
+       // 获取当前关节位置
+    Eigen::Vector3f currentAngles;
+    {
+        std::lock_guard<std::mutex> lock1(stateMutex_);
+        currentAngles << jointStates_[1].position, jointStates_[2].position, jointStates_[3].position;
+    }
+    //std::cout << "Current joint angles: " << currentAngles.transpose() << std::endl;
+    log("当前关节位置: [%.3f, %.3f, %.3f] rad", currentAngles[0]*180.0/M_PI, currentAngles[1]*180.0/M_PI, currentAngles[2]*180.0/M_PI);
+    // 设置轨迹规划器
+    try {
+        jointTrajectoryPlanner_->setTrajectory(currentAngles, targetAngles, duration);
+    } catch (const std::exception& e) {
+        log("轨迹规划异常：%s", e.what());
+        return false;
+    }
+
+    // 预计算完整轨迹（用于滑模控制）
+    auto trajectory = jointTrajectoryPlanner_->generateTrajectory(controlPeriodMs_ / 1000.0f);
+
+    // 清空现有轨迹数据
+    torque_d.clear();
+    q_d.clear();
+    qd_d.clear();
+    qdd_d.clear();
+
+    // 填充预计算轨迹
+    for (const auto& [q, qd, qdd] : trajectory) {
+        // 计算所需扭矩
+        Eigen::Vector3f tau = computeTorques(q, qd, qdd);
+
+        torque_d.push_back(tau);
+        q_d.push_back(q);
+        qd_d.push_back(qd);
+        qdd_d.push_back(qdd);
+        //std::cout << q.transpose() << " " << qd.transpose() << " " << qdd.transpose() << " " << tau.transpose() << std::endl;
+    }
+
+    log("关节轨迹规划完成：%d 个轨迹点，步长=%d ms",
+        static_cast<int>(trajectory.size()), controlPeriodMs_);
+ 
+    return true;
+}
+
+bool ControlWorker::jointPositionControl(float t)
+{
+    // 检查轨迹是否已规划
+    if (!jointTrajectoryPlanned_.load()) {
+        log("错误：关节轨迹未规划");
+        return false;
+    }
+
+    // 检查轨迹是否完成
+    {
+        std::lock_guard<std::mutex> lock(jointTrajectoryMutex_);
+        if (jointTrajectoryPlanner_->isTrajectoryFinished(t)) {
+            log("关节位置控制已完成，时长: %.2f秒", t);
+
+            // 切换到重力补偿模式以保持位置
+            switchControlAlgorithm(ControlAlgorithm::GravityCompensation);
+            jointTrajectoryPlanned_.store(false);
+
+            // 通知轨迹完成，但不停止控制循环
+            return true;
+        }
+    }
+
+    // 使用滑模控制器跟踪预计算轨迹
+    return slidingModeController(t);
 }

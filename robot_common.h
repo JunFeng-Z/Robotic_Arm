@@ -122,7 +122,9 @@ enum class ControlAlgorithm
 {
     GravityCompensation,  // 重力补偿
     PlannedTrajectoryTracking,  // 预定轨迹跟踪
-    TeachingTrajectoryTracking   // 示教轨迹跟踪
+    TeachingTrajectoryTracking,   // 示教轨迹跟踪
+    JointPositionControl,  // 关节位置控制
+    None
 };
 Q_DECLARE_METATYPE(ControlAlgorithm)
 /**
@@ -171,29 +173,29 @@ struct ControlParams
 {
 
     ControlParams() : 
-        sliding_k1(10.0f), sliding_k2(10.0f), sliding_k3(10.0f),
-        sliding_a1(1.0f), sliding_a2(1.0f), sliding_b1(1.0f),
-        torque_limit1(0.15f), torque_limit2(0.2f), torque_limit3(0.11f),
+        sliding_k1(54.0f), sliding_k2(27.0f), sliding_k3(90.0f),
+        sliding_Yd1(0.0f), sliding_Yd2(0.0f), sliding_Yd3(0.0f),
+        torque_limit1(0.15f), torque_limit2(0.25f), torque_limit3(0.15f),
         controlPeriod(1)
     {
         // 向量成员可以直接在这里初始化
         K << sliding_k1, sliding_k2, sliding_k3;
         detlta << torque_limit1, torque_limit2, torque_limit3;
-        sliding_arg << sliding_a1, sliding_a2, sliding_b1;
+        Yd_arg << sliding_Yd1, sliding_Yd2, sliding_Yd3;
     }
     
     // 滑模控制增益
     float sliding_k1;  // 滑模面增益 K[0]
     float sliding_k2;  // 滑模面增益 K[1]
     float sliding_k3;  // 滑模面增益 K[2]
-    float sliding_a1;  // 切换增益 A1
-    float sliding_a2;  // 切换增益 A2
-    float sliding_b1;  // 切换增益 B1
+    float sliding_Yd1;  // 切换增益 Yd1
+    float sliding_Yd2;  // 切换增益 Yd2
+    float sliding_Yd3;  // 切换增益 Yd3
     float torque_limit1;  // 扭矩限制1
     float torque_limit2;  // 扭矩限制2
     float torque_limit3;  // 扭矩限制3
 
-    Eigen::Vector3f K, detlta,sliding_arg;
+    Eigen::Vector3f K, detlta,Yd_arg;
 
 
     // 控制周期（毫秒）

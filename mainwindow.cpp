@@ -64,7 +64,7 @@ QGroupBox *MainWindow::buildConnectionPanel()
     auto *layout = new QGridLayout(group);
     layout->setHorizontalSpacing(12);
     layout->setVerticalSpacing(8);
-    layout->setRowStretch(6, 1);
+    layout->setRowStretch(8, 1);
     layout->setAlignment(Qt::AlignTop);
 
     auto *portLabel = new QLabel(QStringLiteral("串口号:"));
@@ -106,6 +106,33 @@ QGroupBox *MainWindow::buildConnectionPanel()
     layout->addWidget(timeoutCombo_, 5, 0);
     layout->addWidget(cleartextBtn_, 5, 1);
 
+    // 当前关节角度显示
+    auto *jointLabel = new QLabel(QStringLiteral("当前关节角度:"));
+    layout->addWidget(jointLabel, 6, 0, 1, 2, Qt::AlignLeft);
+
+    auto *jointDisplayLayout = new QHBoxLayout;
+    joint1Display_ = new QLabel(QStringLiteral("J1: 0.00 °"));
+    joint2Display_ = new QLabel(QStringLiteral("J2: 0.00 °"));
+    joint3Display_ = new QLabel(QStringLiteral("J3: 0.00 °"));
+
+    // 设置固定宽度和样式
+    joint1Display_->setFixedWidth(80);
+    joint2Display_->setFixedWidth(80);
+    joint3Display_->setFixedWidth(80);
+    joint1Display_->setAlignment(Qt::AlignCenter);
+    joint2Display_->setAlignment(Qt::AlignCenter);
+    joint3Display_->setAlignment(Qt::AlignCenter);
+    joint1Display_->setStyleSheet("QLabel { background-color: #f0f0f0; border: 1px solid #ccc; border-radius: 3px; padding: 2px; }");
+    joint2Display_->setStyleSheet("QLabel { background-color: #f0f0f0; border: 1px solid #ccc; border-radius: 3px; padding: 2px; }");
+    joint3Display_->setStyleSheet("QLabel { background-color: #f0f0f0; border: 1px solid #ccc; border-radius: 3px; padding: 2px; }");
+
+    jointDisplayLayout->addWidget(joint1Display_);
+    jointDisplayLayout->addWidget(joint2Display_);
+    jointDisplayLayout->addWidget(joint3Display_);
+    jointDisplayLayout->addStretch();
+
+    layout->addLayout(jointDisplayLayout, 7, 0, 1, 2);
+
     return group;
 }
 
@@ -124,6 +151,9 @@ QGroupBox *MainWindow::buildRunPanel()
     clearDataBtn_ = new QPushButton(QStringLiteral("清除图表"));
     pausePlotBtn_ = new QPushButton(QStringLiteral("暂停图表"));
     resumePlotBtn_ = new QPushButton(QStringLiteral("重启图表"));
+    Gohome_positionBtn = new QPushButton(QStringLiteral("移动到home位"));
+    Gostop_positionBtn = new QPushButton(QStringLiteral("移动到停止位"));
+    Gonext_positionBtn = new QPushButton(QStringLiteral("移动到指定位置"));
     
     runAlgoBtn_ = new QPushButton(QStringLiteral("运行算法"));
     Algswitch = new QComboBox;
@@ -136,6 +166,53 @@ QGroupBox *MainWindow::buildRunPanel()
     AlgControlRow->addWidget(runAlgoBtn_);
     AlgControlRow->addWidget(Algswitch);
     layout->addLayout(AlgControlRow);
+        // ===== 分割线1 =====
+    layout->addSpacing(5);
+    auto *line1 = new QFrame;
+    line1->setFrameShape(QFrame::HLine);
+    line1->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(line1);
+    layout->addSpacing(5);
+
+    layout->addWidget(Gohome_positionBtn);
+    layout->addWidget(Gostop_positionBtn);
+    layout->addWidget(Gonext_positionBtn);
+    auto *jointInputRow = new QHBoxLayout;
+
+    joint1Spin_ = new QDoubleSpinBox;
+    joint2Spin_ = new QDoubleSpinBox;
+    joint3Spin_ = new QDoubleSpinBox;
+
+    joint1Spin_->setRange(-180.0, 180.0);
+    joint2Spin_->setRange(-180.0, 180.0);
+    joint3Spin_->setRange(-180.0, 180.0);
+
+    joint1Spin_->setDecimals(2);
+    joint2Spin_->setDecimals(2);
+    joint3Spin_->setDecimals(2);
+
+    joint1Spin_->setSuffix(QStringLiteral(" °"));
+    joint2Spin_->setSuffix(QStringLiteral(" °"));
+    joint3Spin_->setSuffix(QStringLiteral(" °"));
+
+    joint1Spin_->setPrefix(QStringLiteral("J1: "));
+    joint2Spin_->setPrefix(QStringLiteral("J2: "));
+    joint3Spin_->setPrefix(QStringLiteral("J3: "));
+
+    jointInputRow->addWidget(joint1Spin_);
+    jointInputRow->addWidget(joint2Spin_);
+    jointInputRow->addWidget(joint3Spin_);
+
+    layout->addLayout(jointInputRow);
+
+    // ===== 分割线2 =====
+    layout->addSpacing(5);
+    auto *line2 = new QFrame;
+    line2->setFrameShape(QFrame::HLine);
+    line2->setFrameShadow(QFrame::Sunken);
+    layout->addWidget(line2);
+    layout->addSpacing(5);
+
     layout->addLayout(plotControlRow);
     layout->addWidget(clearDataBtn_);
 
@@ -192,7 +269,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent),
       AlgorithmRunning_(false)
 {
-    setWindowTitle(QStringLiteral("轻擎机械臂运动控制台"));
+    setWindowTitle(QStringLiteral("三轴力控机械臂运动控制台"));
     resize(1600, 900);
 
     // 创建机器人控制器
@@ -297,6 +374,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(clearDataBtn_, &QPushButton::clicked, this, &MainWindow::onClearDataClicked);
     connect(pausePlotBtn_, &QPushButton::clicked, this, &MainWindow::onPausePlotClicked);
     connect(resumePlotBtn_, &QPushButton::clicked, this, &MainWindow::onResumePlotClicked);
+    connect(Gohome_positionBtn, &QPushButton::clicked, this, &MainWindow::onGoHomePositionClicked);
+    connect(Gostop_positionBtn, &QPushButton::clicked, this, &MainWindow::onGoStopPositionClicked);
+    connect(Gonext_positionBtn, &QPushButton::clicked, this, &MainWindow::onGoNextPositionClicked);
 
     // 连接RobotController的信号
     connect(robotController_, &RobotController::jointStateChanged, this, &MainWindow::onJointStateUpdated);
@@ -429,6 +509,35 @@ void MainWindow::onJointStateUpdated(const JointState &state)
 
         // 关节速度绘图（索引1）
         plotWidgets_[1]->updateData(state.jointIndex - 1, state.velocity);
+    }
+
+    // 更新连接设备面板中的关节角度显示（角度制）
+    if (state.jointIndex >= 1 && state.jointIndex <= 3) {
+        // 将弧度转换为角度
+        float angleDeg = state.position * 180.0f / M_PI;
+
+        // 格式化显示：保留2位小数
+        QString text = QString("J%1: %2 °").arg(state.jointIndex).arg(angleDeg, 0, 'f', 2);
+
+        switch (state.jointIndex) {
+        case 1:
+            if (joint1Display_) {
+                joint1Display_->setText(text);
+            }
+            break;
+        case 2:
+            if (joint2Display_) {
+                joint2Display_->setText(text);
+            }
+            break;
+        case 3:
+            if (joint3Display_) {
+                joint3Display_->setText(text);
+            }
+            break;
+        default:
+            break;
+        }
     }
 }
 
@@ -619,6 +728,24 @@ void MainWindow::onRunAlgoClicked()
             }
             break;
         case ControlAlgorithm::PlannedTrajectoryTracking:
+            if(!AlgorithmRunning_)
+            {
+                robotController_->enableMotors(); // 启动算法前先使能电机，确保机械臂可以响应控制命令
+                this->runAlgoBtn_->setText(QStringLiteral("停止算法"));
+                robotController_->startControl();
+                appendLog(QStringLiteral("预定轨迹跟踪算法已启动"));
+                AlgorithmRunning_ = true;
+            }
+            else
+            {
+                this->runAlgoBtn_->setText(QStringLiteral("运行算法"));
+                robotController_->stopControl();
+                appendLog(QStringLiteral("预定轨迹跟踪算法已停止"));
+                //此时电机仍然使能，若要完全停止机械臂运动需要点击失能电机按钮，否则机械臂将保持最后接收到的力矩
+                //这里最好加一个位置控制命令将机械臂安全地移动到一个预设位置，然后再失能电机，这样可以避免机械臂保持在一个不安全的位置
+                robotController_->disableMotors();
+                AlgorithmRunning_ = false;
+            }
             appendLog(QStringLiteral("运行预定轨迹跟踪算法（待实现）"));
             break;
         case ControlAlgorithm::TeachingTrajectoryTracking:
@@ -762,5 +889,126 @@ void MainWindow::startDataRecording()
                 appendLog(QStringLiteral("无法开始记录 %1").arg(plotNames[i]));
             }
         }
+    }
+}
+
+void MainWindow::onGoHomePositionClicked()
+{
+    if (!robotController_) {
+        appendLog(QStringLiteral("错误：控制器未初始化"));
+        return;
+    }
+
+    // Home位置：所有关节在零位 [0, 0, 0] rad
+    const float joint1Angle = 0.0f;
+    const float joint2Angle = 0.0f;
+    const float joint3Angle = 0.0f;
+    const float duration = 3.0f;  // 3秒轨迹
+
+    // 确保电机已使能
+    robotController_->enableMotors();
+
+    //休眠100ms确保电机使能命令被处理，避免后续位置控制命令被忽略
+    //QThread::msleep(1000);
+
+    // 设置目标关节角度
+    bool success = robotController_->setTargetJointAngles(joint1Angle, joint2Angle, joint3Angle, duration);
+
+    if (success) {
+        appendLog(QStringLiteral("已设置移动到Home位置：关节角度=[0, 0, 0] rad，持续时间=%1 s").arg(duration));
+    } else {
+        appendLog(QStringLiteral("错误：启动Home位置移动失败"));
+    }
+
+    // 确保控制循环正在运行
+    if (!robotController_->isControlRunning()) {
+        robotController_->startControl();
+        appendLog(QStringLiteral("启动控制循环以执行关节位置控制"));
+    }
+}
+
+void MainWindow::onGoStopPositionClicked()
+{
+    if (!robotController_) {
+        appendLog(QStringLiteral("错误：控制器未初始化"));
+        return;
+    }
+
+    // Stop位置：安全停止位置 [0, π/6, -π/6] rad ≈ [0°, 30°, -30°]
+    const float joint1Angle = 0.0f;
+    const float joint2Angle = M_PI / 6.0f;   // 30°
+    const float joint3Angle = -M_PI / 6.0f;  // -30°
+    const float duration = 3.0f;  // 3秒轨迹
+
+    // 确保电机已使能
+    robotController_->enableMotors();
+
+    // 确保控制循环正在运行
+    if (!robotController_->isControlRunning()) {
+        robotController_->startControl();
+        appendLog(QStringLiteral("启动控制循环以执行关节位置控制"));
+    }
+
+    // 设置目标关节角度
+    bool success = robotController_->setTargetJointAngles(joint1Angle, joint2Angle, joint3Angle, duration);
+
+    if (success) {
+        appendLog(QStringLiteral("已启动移动到Stop位置：关节角度=[0, %1, %2] rad，持续时间=%3 s")
+                  .arg(joint2Angle, 0, 'f', 3)
+                  .arg(joint3Angle, 0, 'f', 3)
+                  .arg(duration));
+    } else {
+        appendLog(QStringLiteral("错误：启动Stop位置移动失败"));
+    }
+}
+
+void MainWindow::onGoNextPositionClicked()
+{
+    if (!robotController_) {
+        appendLog(QStringLiteral("错误：控制器未初始化"));
+        return;
+    }
+
+    // 从界面输入获取角度（度），转换为弧度
+    if (!joint1Spin_ || !joint2Spin_ || !joint3Spin_) {
+        appendLog(QStringLiteral("错误：关节角度输入控件未初始化"));
+        return;
+    }
+
+    // 获取角度值（度）
+    float joint1Deg = joint1Spin_->value();
+    float joint2Deg = joint2Spin_->value();
+    float joint3Deg = joint3Spin_->value();
+
+    // 转换为弧度
+    float joint1Angle = joint1Deg * M_PI / 180.0f;
+    float joint2Angle = joint2Deg * M_PI / 180.0f;
+    float joint3Angle = joint3Deg * M_PI / 180.0f;
+
+    const float duration = 3.0f;  // 3秒轨迹
+
+    // 确保电机已使能
+    robotController_->enableMotors();
+
+    // 确保控制循环正在运行
+    if (!robotController_->isControlRunning()) {
+        robotController_->startControl();
+        appendLog(QStringLiteral("启动控制循环以执行关节位置控制"));
+    }
+
+    // 设置目标关节角度
+    bool success = robotController_->setTargetJointAngles(joint1Angle, joint2Angle, joint3Angle, duration);
+
+    if (success) {
+        appendLog(QStringLiteral("已启动移动到指定位置：关节角度=[%1, %2, %3] rad (输入=[%4, %5, %6]°)，持续时间=%7 s")
+                  .arg(joint1Angle, 0, 'f', 3)
+                  .arg(joint2Angle, 0, 'f', 3)
+                  .arg(joint3Angle, 0, 'f', 3)
+                  .arg(joint1Deg, 0, 'f', 1)
+                  .arg(joint2Deg, 0, 'f', 1)
+                  .arg(joint3Deg, 0, 'f', 1)
+                  .arg(duration));
+    } else {
+        appendLog(QStringLiteral("错误：启动指定位置移动失败"));
     }
 }

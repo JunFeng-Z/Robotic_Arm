@@ -45,6 +45,7 @@ else()
             robot_common.h
             robot_model.h robot_model.cpp
             trajectory_generator.h trajectory_generator.cpp
+            joint_trajectory_planner.h joint_trajectory_planner.cpp
         )
     endif()
 endif()
